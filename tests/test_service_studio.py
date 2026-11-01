@@ -191,3 +191,15 @@ def test_classify_window():
     assert ss.classify_window("AggregatorWindow") is ss.WindowRole.MAIN
     assert ss.classify_window("DialogWindow") is ss.WindowRole.DIALOG
     assert ss.classify_window("Other") is ss.WindowRole.OTHER
+
+
+def test_parse_module_caption():
+    cap = ss.parse_module_caption("* MOD_A_BL (MOD A App)")
+    assert cap == ss.ModuleCaption(name="MOD_A_BL", application="MOD A App", unsaved=True)
+    assert ss.parse_module_caption("Plain") == ss.ModuleCaption(name="Plain")
+    assert ss.parse_module_caption("  *  ") is None
+
+
+def test_same_module_name_is_case_insensitive():
+    assert ss.same_module_name("DGA_UI", " dga_ui ")
+    assert not ss.same_module_name("DGA_UI", "MOD_DGA_UI")

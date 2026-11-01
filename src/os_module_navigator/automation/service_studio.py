@@ -16,6 +16,7 @@ Observed structure (Service Studio 11 on this machine, see docs/phase1-findings.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from enum import StrEnum
 
@@ -29,9 +30,15 @@ SHELL_WIN32_CLASS_PREFIX = "Avalonia-"
 SHELL_UIA_CLASS = "AggregatorWindow"
 DIALOG_UIA_CLASS = "DialogWindow"
 OPEN_FROM_ENVIRONMENT_TITLE = "Open from Environment"
+# Dialogs Service Studio shows briefly while loading; wait them out instead of failing.
+TRANSIENT_DIALOG_TITLES: frozenset[str] = frozenset({"Progress"})
 SHELL_TABS_AUTOMATION_ID = "tabs"
 WEBVIEW_WIN32_CLASS = "Chrome_RenderWidgetHostHWND"
 UNSAVED_MARKER = "*"
+SEARCH_MODULES_BUTTON_NAME = "Search Modules"
+MODULE_SEARCH_EDIT_NAME = "Search for Module Name, Application Name or Author"
+OPEN_BUTTON_NAME = "Open"
+CANCEL_BUTTON_NAME = "Cancel"
 
 
 class ShellTabKind(StrEnum):
@@ -91,7 +98,9 @@ class LandmarkRule(BaseModel):
 
 # Only labels that were actually observed in the accessibility tree.
 LANDMARK_RULES: tuple[LandmarkRule, ...] = (
-    LandmarkRule(key="search_modules_button", control_type="Button", name="Search Modules"),
+    LandmarkRule(
+        key="search_modules_button", control_type="Button", name=SEARCH_MODULES_BUTTON_NAME
+    ),
     LandmarkRule(
         key="search_applications_edit", control_type="Edit", name="Search Applications..."
     ),
@@ -105,12 +114,12 @@ LANDMARK_RULES: tuple[LandmarkRule, ...] = (
     LandmarkRule(
         key="module_search_edit",
         control_type="Edit",
-        name="Search for Module Name, Application Name or Author",
+        name=MODULE_SEARCH_EDIT_NAME,
     ),
     LandmarkRule(key="results_table", control_type="Table"),
-    LandmarkRule(key="open_button", control_type="Button", name="Open"),
+    LandmarkRule(key="open_button", control_type="Button", name=OPEN_BUTTON_NAME),
     LandmarkRule(key="view_versions_button", control_type="Button", name="View Versions"),
-    LandmarkRule(key="cancel_button", control_type="Button", name="Cancel"),
+    LandmarkRule(key="cancel_button", control_type="Button", name=CANCEL_BUTTON_NAME),
 )
 
 
@@ -267,3 +276,34 @@ def is_shell_candidate(window: WindowHandle) -> bool:
 
 def is_webview(window: WindowHandle) -> bool:
     return window.class_name == WEBVIEW_WIN32_CLASS
+
+
+class ModuleCaption(BaseModel):
+    name: str
+    application: str | None = None
+    unsaved: bool = False
+
+
+_CAPTION_WITH_APP = re.compile(r"^(?P<name>.+?)\s*\((?P<app>[^()]*)\)$")
+
+
+def parse_module_caption(caption: str) -> ModuleCaption | None:
+    """Parse a module editor tab caption such as ``* MyModule (My App)``."""
+    text = " ".join(caption.split())
+    unsaved = text.startswith(UNSAVED_MARKER)
+    text = text.removeprefix(UNSAVED_MARKER).strip()
+    if not text:
+        return None
+    match = _CAPTION_WITH_APP.match(text)
+    if match:
+        return ModuleCaption(
+            name=match.group("name").strip(),
+            application=match.group("app").strip(),
+            unsaved=unsaved,
+        )
+    return ModuleCaption(name=text, unsaved=unsaved)
+
+
+def same_module_name(a: str, b: str) -> bool:
+    """OutSystems module names are unique case-insensitively."""
+    return a.strip().casefold() == b.strip().casefold()
