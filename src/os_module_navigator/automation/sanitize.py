@@ -38,12 +38,16 @@ LABEL_CONTROL_TYPES: frozenset[str] = frozenset(
 # content-type elements (Text, Group, ...).
 KNOWN_UI_LABELS: frozenset[str] = frozenset(
     {
+        "Application",
+        "By",
+        "Changed",
         "Debugger",
         "Edit",
         "Environment",
         "Help",
         "Module",
         "Navigation",
+        "Open from Environment",
         "Publish",
         "Recent modules",
         "View",

@@ -42,7 +42,8 @@ class ShellWindowReport(BaseModel):
     pid: int
     uia_framework: str
     uia_class: str
-    is_service_studio_shell: bool
+    role: ss.WindowRole
+    title: str = ""
     tabs: list[ss.ShellTab] = Field(default_factory=list)
     tree: ElementNode | None = None
 
@@ -55,6 +56,7 @@ class WebViewReport(BaseModel):
     element_count: int
     control_types: dict[str, int]
     landmarks: list[ss.Landmark] = Field(default_factory=list)
+    search_results: ss.ModuleSearchResults | None = None
     tree: ElementNode | None = None
 
 
@@ -72,7 +74,7 @@ def _observations(report: DiagnosticReport) -> list[str]:
     notes: list[str] = []
     if not report.process_ids:
         return [f"{report.process_name} is not running."]
-    shells = [w for w in report.shell_windows if w.is_service_studio_shell]
+    shells = [w for w in report.shell_windows if w.role is ss.WindowRole.MAIN]
     if not shells:
         notes.append("No Service Studio shell window (UIA class AggregatorWindow) was found.")
         return notes
@@ -102,6 +104,27 @@ def _observations(report: DiagnosticReport) -> list[str]:
             if landmark.key in {"search_modules_button", "search_applications_edit"}:
                 pats = ", ".join(landmark.patterns) or "none"
                 notes.append(f"'{landmark.label}' ({landmark.control_type}) patterns: {pats}.")
+
+    dialogs = [w for w in report.shell_windows if w.role is ss.WindowRole.DIALOG]
+    for dialog in dialogs:
+        notes.append(f"Dialog window open: {dialog.title!r} (separate Avalonia window).")
+    for view in report.webviews:
+        if view.kind is not ss.WebViewKind.OPEN_FROM_ENVIRONMENT:
+            continue
+        for landmark in view.landmarks:
+            if landmark.key in {"module_search_edit", "open_button"}:
+                pats = ", ".join(landmark.patterns) or "none"
+                state = "enabled" if landmark.enabled else "disabled"
+                notes.append(
+                    f"'{landmark.label}' ({landmark.control_type}, {state}) patterns: {pats}."
+                )
+        if view.search_results is not None:
+            rows = view.search_results.rows
+            on_screen = sum(r.on_screen for r in rows)
+            notes.append(
+                f"Results table columns {view.search_results.columns}: "
+                f"{len(rows)} row(s) rendered, {on_screen} on screen (list is virtualized)."
+            )
     return notes
 
 
@@ -133,7 +156,8 @@ def build_report(
                     pid=pid,
                     uia_framework=raw.framework_id,
                     uia_class=raw.class_name,
-                    is_service_studio_shell=raw.class_name == ss.SHELL_UIA_CLASS,
+                    role=ss.classify_window(raw.class_name),
+                    title=redact(raw.control_type, raw.name),
                     tabs=ss.read_shell_tabs(raw, redact),
                     tree=sanitize_tree(raw, reveal=reveal_names) if include_trees else None,
                 )
@@ -149,15 +173,30 @@ def build_report(
                 lm.model_copy(update={"label": redact(lm.control_type, lm.label)})
                 for lm in ss.find_landmarks(raw)
             ]
+            kind = ss.classify_webview(raw)
+            results = None
+            if kind is ss.WebViewKind.OPEN_FROM_ENVIRONMENT:
+                results = ss.read_module_search_results(raw)
+            if results is not None:
+                results = ss.ModuleSearchResults(
+                    columns=[redact("Text", c) for c in results.columns],
+                    rows=[
+                        row.model_copy(
+                            update={"cells": {k: redact("Text", v) for k, v in row.cells.items()}}
+                        )
+                        for row in results.rows
+                    ],
+                )
             report.webviews.append(
                 WebViewReport(
                     hwnd=window.hwnd,
                     pid=pid,
                     visible=window.visible,
-                    kind=ss.classify_webview(raw),
+                    kind=kind,
                     element_count=raw.count(),
                     control_types=dict(raw.control_type_counts().most_common()),
                     landmarks=landmarks,
+                    search_results=results,
                     tree=sanitize_tree(raw, reveal=reveal_names) if include_trees else None,
                 )
             )
@@ -202,7 +241,7 @@ def format_summary(report: DiagnosticReport, *, print_trees: bool, max_tree_line
     for shell in report.shell_windows:
         out.append(
             f"Shell window hwnd={shell.hwnd} framework={shell.uia_framework!r} "
-            f"class={shell.uia_class!r} service_studio={shell.is_service_studio_shell}"
+            f"class={shell.uia_class!r} role={shell.role.value} title={shell.title!r}"
         )
         for tab in shell.tabs:
             out.append(
@@ -221,8 +260,13 @@ def format_summary(report: DiagnosticReport, *, print_trees: bool, max_tree_line
         for lm in view.landmarks:
             out.append(
                 f"  landmark {lm.key}: {lm.control_type} {lm.label!r} "
-                f"patterns={lm.patterns} focusable={lm.keyboard_focusable}"
+                f"patterns={lm.patterns} focusable={lm.keyboard_focusable} enabled={lm.enabled}"
             )
+        if view.search_results is not None:
+            out.append(f"  results columns={view.search_results.columns}")
+            for row in view.search_results.rows:
+                cells = " | ".join(row.cells.values())
+                out.append(f"    {'on-screen ' if row.on_screen else 'off-screen'} {cells}")
         if print_trees and view.tree:
             out.extend(format_tree(view.tree, max_lines=max_tree_lines, indent=2))
         out.append("")

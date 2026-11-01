@@ -107,3 +107,87 @@ def test_window_filters():
     assert not ss.is_shell_candidate(hidden)
     assert not ss.is_shell_candidate(webview)
     assert ss.is_webview(webview)
+
+
+def _cell(text: str, visible: bool = True):
+    from os_module_navigator.automation.uia import Rect
+
+    size = 10 if visible else 0
+    return ElementNode(
+        control_type="Group",
+        keyboard_focusable=True,
+        rect=Rect(left=0, top=0, width=size, height=size),
+        children=[ElementNode(control_type="Text", name=text)],
+    )
+
+
+def open_from_environment() -> ElementNode:
+    headers = ElementNode(
+        control_type="Custom",
+        children=[
+            ElementNode(
+                control_type="Header",
+                name="Module ",
+                children=[
+                    ElementNode(control_type="Text", name="Module"),
+                    ElementNode(control_type="Text", name=""),
+                ],
+            ),
+            ElementNode(control_type="Header", name="Application"),
+        ],
+    )
+    body = ElementNode(
+        control_type="Custom",
+        children=[
+            ElementNode(
+                control_type="DataItem",
+                children=[
+                    _cell("ModA"),
+                    _cell("App A"),
+                    _cell("ModB", visible=False),
+                    _cell("App B", visible=False),
+                ],
+            )
+        ],
+    )
+    return ElementNode(
+        control_type="Document",
+        children=[
+            ElementNode(
+                control_type="Edit",
+                name="Search for Module Name, Application Name or Author",
+                patterns=["Value"],
+            ),
+            ElementNode(control_type="Table", children=[headers, body]),
+            ElementNode(control_type="Button", name="Open", patterns=["Invoke"], enabled=False),
+            ElementNode(control_type="Button", name="Cancel", patterns=["Invoke"]),
+        ],
+    )
+
+
+def test_open_from_environment_dialog_is_classified():
+    root = open_from_environment()
+    assert ss.classify_webview(root) is ss.WebViewKind.OPEN_FROM_ENVIRONMENT
+    open_button = next(lm for lm in ss.find_landmarks(root) if lm.key == "open_button")
+    assert open_button.enabled is False
+
+
+def test_read_module_search_results_rebuilds_rows():
+    results = ss.read_module_search_results(open_from_environment())
+    assert results is not None
+    assert results.columns == ["Module", "Application"]
+    assert [r.cells for r in results.rows] == [
+        {"Module": "ModA", "Application": "App A"},
+        {"Module": "ModB", "Application": "App B"},
+    ]
+    assert [r.on_screen for r in results.rows] == [True, False]
+
+
+def test_read_module_search_results_without_table():
+    assert ss.read_module_search_results(environment_home()) is None
+
+
+def test_classify_window():
+    assert ss.classify_window("AggregatorWindow") is ss.WindowRole.MAIN
+    assert ss.classify_window("DialogWindow") is ss.WindowRole.DIALOG
+    assert ss.classify_window("Other") is ss.WindowRole.OTHER

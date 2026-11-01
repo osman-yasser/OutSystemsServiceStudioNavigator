@@ -10,10 +10,13 @@ application and module names are left out of this report on purpose.
 
 **Python can reliably find, attach to, and read Service Studio without
 restarting it.** The search/open workflow looks feasible with pywinauto alone
-up to the point of *typing into search boxes and pressing buttons*. Opening a
-specific module from a list is **not yet proven**: list entries in the
-web UI expose no actionable UIA pattern, and the module search dialog has not
-been inspected yet (it only exists after it's opened).
+up to the point of *typing into search boxes and pressing buttons*. The
+module search dialog ("Open from Environment", Ctrl+O) has a search box with
+`ValuePattern`, a readable results table and an `Open` button with `Invoke`.
+A supervised test showed that setting the search box value filters the
+results, the first row is auto-selected, and `Up`/`Down` keys move the
+selection, so the whole workflow can be done **without mouse clicks**. The
+only gap: UIA can't report which row is selected.
 
 ## What Service Studio looks like to UI Automation
 
@@ -95,65 +98,114 @@ The environment page top menu (`Environment`, `Edit`, `Help`) and the editor
 menu (`Module`, `Edit`, `View`, `Debugger`, `Help`) are plain `Text` nodes with
 no patterns.
 
+### 5. "Open from Environment" dialog (Ctrl+O)
+
+Inspected with the dialog opened by the user via **Ctrl+O** (the environment
+page's `Search Modules` button very likely opens the same dialog — not yet confirmed).
+
+- **Separate top-level Avalonia window**: UIA class `DialogWindow`, name
+  `Open from Environment`, with its own title bar (`Maximize`, `Close`) and its
+  own Chromium pane (`CefBrowserWindow` → `Chrome_RenderWidgetHostHWND`).
+- Contents of the Chromium pane:
+
+  | Element | Control type | Patterns | Focusable | Enabled |
+  |---|---|---|---|---|
+  | `Modules available at '<host>'` | `Text` | — | no | — |
+  | `Search for Module Name, Application Name or Author` | `Edit` | **Value**, Text | yes | yes |
+  | Results grid | `Table` | Grid (reports 2 rows × 4 columns) | no | yes |
+  | Column headers `Module`, `Application`, `Changed`, `By` | `Header` | GridItem | no | yes |
+  | Result cells | `Group` with one `Text` child | — | **yes** | yes |
+  | `View Versions` | `Button` | Invoke | no | **disabled** |
+  | `Open` | `Button` | Invoke | no | **disabled** (until a row is selected) |
+  | `Cancel` | `Button` | Invoke | yes | yes |
+
+- **Flattened grid**: Chromium exposes *all* result cells as children of one
+  `DataItem`; there are no row elements. Rows are rebuilt by chunking cells by
+  the number of headers (`read_module_search_results`). Module name and
+  application name are separate, clearly labelled columns.
+- **Virtualized list**: with an empty search box only 12 rows were rendered
+  (10 on screen, 2 just off screen with a zero-size rectangle). Listing all
+  modules by reading the table is not possible; the search box must be used to
+  narrow results.
+- Cells are keyboard-focusable but expose no Invoke / SelectionItem / default action.
+
+## Supervised interaction test (2026-11-02)
+
+Run with the user watching, inside the "Open from Environment" dialog only,
+using a throwaway script (not part of the package). Search text: `DGA_UI`.
+`Open` and `Enter` were never pressed. The selection was put back on row 1 at the end.
+
+| Test | Result |
+|---|---|
+| `ValuePattern.SetValue` on the search box | ✅ **Filters the results** (12 → 2 rows within ~2 s). Reading the value back returns the text. No typing needed. |
+| Search matching | Substring match: `DGA_UI` matched `DGA_UI` **and** `MOD_DGA_UI`. Results are sorted by Module. |
+| `Open` after filtering | Becomes **enabled on its own**: the first row is auto-selected. |
+| Selection visible through UIA? | ❌ No. Rows/cells report no IsSelected, no ARIA state, identical legacy state. `HasKeyboardFocus` only tracks focus, not selection. |
+| Selection visible on screen? | ✅ Selected row background is blue (`rgb 123,126,253`), others near-white (`249,250,251`), sampled from the cells' live UIA rectangles **while the dialog is in front** (when covered, sampling just reads the covering window). |
+| UIA `SetFocus` on another row's cell | Moves keyboard focus only; selection stays on row 1. |
+| `Space` on a focused cell | No change to selection. |
+| `Down` / `Up` with focus in the search box | ✅ **Moves the selection** down / up one row. |
+| `Down` with focus on a cell | ✅ Also moves the selection. |
+
+### Resulting workflow (keyboard only, no mouse)
+
+1. Find the `DialogWindow` "Open from Environment" (open it with Ctrl+O or the
+   `Search Modules` button — opening it by automation not yet tested).
+2. `SetValue(module_name)` on the search box; poll until the rows only contain the query.
+3. Read rows; find the rows whose Module equals `module_name` exactly.
+   0 → not found; >1 → ambiguity error.
+4. Focus the search box, press `Up` enough times to reach row 0, then `Down`
+   *index* times. (Row 0 is auto-selected, so for index 0 no key is needed.)
+5. Optionally confirm by sampling the highlight colour of the target row (theme-dependent, secondary check only).
+6. Invoke `Open`.
+7. Verify: dialog closes, and a new selected `AggregatorView` tab whose caption starts with the module name appears.
+
+**No coordinate clicking is needed**, so the PyAutoGUI/click fallback below can
+stay unused. Keyboard input does require the dialog to be the foreground
+window (UIA `SetFocus` brings it to front).
+
 ## Can the workflow be done with pywinauto alone?
+
+**Yes, very likely**, with keyboard input for row selection.
 
 | Step | Status | Notes |
 |---|---|---|
 | 1. Discover process/window | ✅ Proven | psutil + `EnumWindows`, Avalonia class prefix, UIA class `AggregatorWindow` |
 | 2. Attach without restart | ✅ Proven | UIA by handle |
-| 3. Verify connected environment | ✅ Likely | Environment tab present with a caption; environment name/host also on the home page. Not yet tested when disconnected/logged out. |
-| 4. Navigate to module selection | 🟡 Likely | Environment tab `TabItem` supports `SelectionItem.Select()`. `Search Modules` button supports `Invoke`. Both untested (Phase 1 did not interact). |
-| 5. Search for module | 🟡 Unknown | Depends on the Search Modules dialog, which has not been inspected. `Search Applications...` edit supports `Value` as a fallback path for searching applications. |
-| 6. Identify matches | 🟡 Partly | Result *text* is readable (recent modules and app tiles are). Need to see the dialog's result list. |
-| 7. Open the selected module | 🔴 Not proven | Entries seen so far are non-focusable `Text`/`Image` with no Invoke, SelectionItem or default action. If the dialog's results look the same, opening requires a click (see fallback below) or keyboard navigation. |
-| 8. Verify module opened | ✅ Likely | A new `AggregatorView` tab appears with the module name in its caption, and becomes selected. |
+| 3. Verify connected environment | ✅ Likely | Environment tab present with a caption; the dialog also names the host. Not yet tested when disconnected/logged out. |
+| 4. Open the module search dialog | 🟡 Untested by automation | Ctrl+O works manually; `Search Modules` button (Invoke) also available. |
+| 5. Search for module | ✅ Proven | `ValuePattern.SetValue` filters results. |
+| 6. Identify matches | ✅ Proven | Rows readable; exact match on Module column. |
+| 7. Select and open | 🟡 Selection proven, Open not pressed | Row 0 auto-selected; `Up`/`Down` from the search box move the selection. `Open` has Invoke and is enabled once a row is selected. |
+| 8. Verify module opened | 🟡 Likely | New `AggregatorView` tab with the module name in its caption. Not yet observed by automation. |
 
 ## Limitations found
 
-1. Avalonia window is invisible to pywinauto's desktop window listing — must use handles.
+1. Avalonia windows are invisible to pywinauto's desktop window listing — must use handles.
 2. Chromium tree is lazy; first read is empty.
-3. Web UI list entries are not exposed as list items/buttons, so there's no
-   pure-UIA way to "click" them that we've seen yet.
-4. Very few stable automation ids; matching must rely on control type + label
-   text, which may change between Service Studio versions or UI languages.
-5. Element bounding rectangles for hidden panes are stale/offset; rectangles
-   are only trustworthy for the visible pane.
+3. Row selection is **not exposed to UIA**; it can only be driven by keys and confirmed indirectly (row index arithmetic, highlight colour, and the opened tab's caption).
+4. The results list is virtualized; with a specific search this hardly matters, but a very broad query may need scrolling for rows past the first ~12.
+5. Keyboard input needs the dialog in the foreground, which briefly takes focus from whatever the user is doing.
+6. Very few stable automation ids; matching relies on control type + label text (English UI assumed).
+7. Rectangles of hidden panes and off-screen rows are stale or zero.
 
-## Proposed narrow fallback (needs your approval before Phase 2 uses it)
+## Click fallback (not needed for now)
 
-If the module search dialog's result rows are not invokable:
-
-- Only after the dialog is open, in front, and the target row has been matched
-  **exactly** (and uniquely) by its UIA text,
-- compute the click point from that element's **live UIA bounding rectangle**
-  (center), check the point lies inside the Service Studio window and that
-  Service Studio is the foreground window,
-- send a single click there (pywinauto `click_input` or PyAutoGUI),
-- then verify via the new editor tab.
-
-No hardcoded coordinates and no blind clicking. A keyboard alternative
-(focus the search box, type, arrow down, Enter) may avoid clicking entirely if
-the dialog supports it — to be tested first.
+Kept only in case keyboard selection stops working in another version: a single
+click at the target cell's live UIA rectangle centre, only when the dialog is in
+front and the match is exact and unique. Requires your approval before use.
 
 ## Still unknown
 
-- The structure of the **Search Modules** dialog (separate Avalonia window or
-  an in-page overlay; its search box; its result list; whether rows are
-  invokable or keyboard-navigable).
-- Which of the two text lines in a recent-module entry is the module name and
-  which is the application.
-- Behaviour when Service Studio is disconnected, on the login screen, or showing a modal dialog.
-- Whether opening a module while another module has unsaved changes prompts a dialog.
-- Behaviour with several Service Studio windows/processes.
+- Opening the dialog by automation (Ctrl+O to the main window vs. invoking `Search Modules`).
+- Whether invoking `Open` triggers a prompt when the current module has unsaved changes (it opens a *new* tab, so probably not).
+- What happens when the module is already open in a tab.
+- Behaviour when disconnected / on the login screen / another modal is open.
+- Behaviour with several Service Studio processes.
+- Scrolling behaviour for result lists longer than the rendered rows.
 
-## Next step (user-assisted inspection)
+## Next step
 
-Open **Search Modules** manually in Service Studio (environment tab → *Search
-Modules*), type part of a module name so results show, leave it open, then run:
-
-```
-uv run os-nav-diagnose --tree --max-tree-lines 400
-```
-
-The snapshot in `diagnostics_output/` will show the dialog's controls, which
-decides whether Phase 2 needs the click fallback.
+Phase 1 is complete. Phase 2 can implement `DesktopGUIProvider` on the
+keyboard workflow above. The first real `open_module` run should be supervised
+on a module you choose.

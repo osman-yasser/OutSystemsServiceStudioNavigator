@@ -22,7 +22,7 @@ def report(**overrides) -> DiagnosticReport:
                 pid=1,
                 uia_framework="Avalonia",
                 uia_class="AggregatorWindow",
-                is_service_studio_shell=True,
+                role=ss.WindowRole.MAIN,
                 tabs=[
                     ss.ShellTab(type_name="x.ServerPage", kind=ss.ShellTabKind.ENVIRONMENT),
                     ss.ShellTab(
