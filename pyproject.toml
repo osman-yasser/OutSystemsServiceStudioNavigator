@@ -1,0 +1,40 @@
+[project]
+name = "os-module-navigator"
+version = "0.1.0"
+description = "Local MCP server that navigates the OutSystems Service Studio 11 desktop GUI to find and open modules."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "psutil>=7.2.2",
+    "pydantic>=2.14.2",
+    "pywinauto>=0.6.9",
+]
+
+[project.scripts]
+os-nav-diagnose = "os_module_navigator.diagnostics:main"
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::SyntaxWarning"]
