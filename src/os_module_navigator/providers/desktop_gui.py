@@ -274,6 +274,11 @@ class DesktopGUINavigator:
 
 
 def _init_com_thread() -> None:
+    import warnings
+
+    # pywinauto announces that it picked up our COM flags; that's expected.
+    warnings.filterwarnings("ignore", message="Apply externally defined coinit_flags")
+    warnings.filterwarnings("ignore", category=SyntaxWarning)
     if "comtypes" not in sys.modules:
         sys.coinit_flags = 0  # type: ignore[attr-defined]  # COINIT_MULTITHREADED
     import comtypes

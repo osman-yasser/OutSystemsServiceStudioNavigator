@@ -1,20 +1,49 @@
 # OutSystems O11 Module Navigator MCP
 
-A local MCP server (planned) that lets Codex drive the **OutSystems Service
-Studio 11 desktop app** to search for and open modules, so the official
-OutSystems MCP can work on them without a manual "open module" step.
+A local MCP server that lets Codex drive the **OutSystems Service Studio 11
+desktop app** to search for and open modules, so the official OutSystems MCP
+can work on them without a manual "open module" step.
 
-Status: **Phase 2 — desktop GUI provider.** Search and status are verified
-live; opening a module is implemented and unit-tested, with the first live run
-still to do. The MCP server (Phase 3) is not built yet.
-See [docs/phase1-findings.md](docs/phase1-findings.md) for how Service Studio
-looks to UI Automation.
+Status: **Phase 3 — MCP server.** All three tools work over stdio against a
+live Service Studio. Still to do: a run from inside Codex alongside the official
+OutSystems MCP. Background: [docs/phase1-findings.md](docs/phase1-findings.md),
+[docs/phase2-live-verification.md](docs/phase2-live-verification.md).
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `get_service_studio_status()` | Running? window found? backend, connected environment, module in front (+ unsaved flag), open modules, open dialog |
+| `search_modules(query)` | Searches module name / application / author via *Open from Environment*; returns name, application, changed, by |
+| `open_module(module_name)` | Opens the module with this exact name (case-insensitive) and verifies its tab; brings an already-open module to the front |
+
+Errors come back as tool errors whose text is JSON:
+`{"code": "...", "message": "...", "candidates"|"suggestions": [...]}`. Codes:
+`service_studio_not_running`, `window_not_found`, `not_connected`,
+`unexpected_dialog`, `search_dialog_unavailable`, `module_not_found`,
+`ambiguous_module`, `automation_timeout`, `focus_error`, `wrong_module_opened`.
 
 ## Setup
 
 ```
 uv sync
 ```
+
+## Use with Codex
+
+Add to `~/.codex/config.toml` (adjust paths):
+
+```toml
+[mcp_servers.outsystems_module_navigator]
+command = 'C:\Users\<you>\.local\bin\uv.exe'
+args = ["--directory", 'D:\MyProjects\OutSystemsServiceStudioNavigator', "run", "--quiet", "os-module-navigator"]
+startup_timeout_sec = 60
+tool_timeout_sec = 180   # open_module can take up to ~60 s to verify; Codex's default is 60 s
+```
+
+Then restart Codex and check with `codex mcp list`. Keep the official
+`servicestudio` MCP enabled too: this server opens the module, the official one
+edits it.
 
 ## How it works
 
