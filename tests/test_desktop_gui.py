@@ -403,3 +403,12 @@ def test_close_blocked_by_unexpected_dialog():
     with pytest.raises(UnexpectedDialogError):
         navigator(driver).close("M0")
     assert not driver.called("close_module_tab")
+
+
+def test_close_module_open_in_two_windows_closes_one():
+    # Two windows (e.g. two environments) can each have the same module open.
+    tabs = [*many_modules(2), ENV, editor("M0 (App)")]
+    driver = FakeDriver(CATALOGUE, tabs=tabs)
+    result = navigator(driver).close("M0")
+    assert result.open_modules_count == 2
+    assert driver.called("close_module_tab") == [("close_module_tab", 1, "M0")]

@@ -242,15 +242,28 @@ def _caption(tab_item: ElementNode) -> str:
     return ""
 
 
+def _shallowest_shell_strip(root: ElementNode) -> ElementNode | None:
+    level = [root]
+    while level:
+        for node in level:
+            if node.control_type == "Tab" and node.automation_id == SHELL_TABS_AUTOMATION_ID:
+                return node
+        level = [child for node in level for child in node.children]
+    return None
+
+
 def read_shell_tabs(
     shell: ElementNode, sanitize: Callable[[str, str], str] | None = None
 ) -> list[ShellTab]:
-    """Read the shell tab strip. ``sanitize(control_type, text)`` redacts captions."""
+    """Read the shell tab strip. ``sanitize(control_type, text)`` redacts captions.
+
+    Only the shallowest ``Tab`` with automation id ``tabs`` is read: module
+    editors contain inner tab strips that must not be mixed in.
+    """
     tabs: list[ShellTab] = []
-    for node in shell.iter_nodes():
-        if node.control_type != "Tab" or node.automation_id != SHELL_TABS_AUTOMATION_ID:
-            continue
-        for item in node.children:
+    strip = _shallowest_shell_strip(shell)
+    if strip is not None:
+        for item in strip.children:
             if item.control_type != "TabItem":
                 continue
             caption = _caption(item)

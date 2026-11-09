@@ -232,16 +232,19 @@ class DesktopGUINavigator:
                 f"{caption.name!r} has unsaved changes; it was not closed. "
                 "Ask the user to save it in Service Studio, or close another module."
             )
+        before = sum(ss.same_module_name(c.name, module_name) for _, _, c in tabs)
         self.driver.close_module_tab(index, caption.name)
-        return self._verify_closed(caption.name)
+        return self._verify_closed(caption.name, before)
 
-    def _verify_closed(self, module_name: str) -> CloseModuleResult:
+    def _verify_closed(self, module_name: str, before: int) -> CloseModuleResult:
+        # The same module can be open in two windows (e.g. two environments), so
+        # success means one tab fewer with that name, not none left.
         deadline = self._clock() + self.config.close_verify_timeout_s
         while True:
             self._sleep(self.config.poll_interval_s)
             state = self.driver.read_state()
             remaining = [c.name for _, _, c in _module_tabs(state)]
-            if not any(ss.same_module_name(n, module_name) for n in remaining):
+            if sum(ss.same_module_name(n, module_name) for n in remaining) < before:
                 return CloseModuleResult(
                     module_name=module_name,
                     message="The module tab was closed.",

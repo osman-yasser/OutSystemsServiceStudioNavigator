@@ -104,12 +104,20 @@ def find_first(root_hwnd: int, *, control_type: str, title: str | None = None) -
 
 
 def shell_tab_items(main_hwnd: int) -> list[Any]:
-    """Live TabItem elements of the shell tab strip, in display order."""
-    tabs = find_first(main_hwnd, control_type="Tab")
-    if tabs is None:
-        return []
+    """Live TabItem elements of the shell tab strip, in display order.
+
+    The shell strip is the window's direct ``Tab`` child with automation id
+    ``tabs``. A module editor has its own inner tab strips (e.g. "Warnings",
+    "Debugger"), so the first ``Tab`` descendant is not necessarily the shell's.
+    Must match ``service_studio.read_shell_tabs`` so tab indexes line up.
+    """
     try:
-        return list(tabs.children(control_type="TabItem"))
+        strips = [
+            child
+            for child in element_info(main_hwnd).children(control_type="Tab")
+            if child.automation_id == ss.SHELL_TABS_AUTOMATION_ID
+        ]
+        return list(strips[0].children(control_type="TabItem")) if strips else []
     except Exception:
         return []
 

@@ -203,3 +203,19 @@ def test_parse_module_caption():
 def test_same_module_name_is_case_insensitive():
     assert ss.same_module_name("DGA_UI", " dga_ui ")
     assert not ss.same_module_name("DGA_UI", "MOD_DGA_UI")
+
+
+def test_read_shell_tabs_ignores_inner_editor_tab_strips():
+    # A module editor holds its own tab strips (Warnings, Debugger), sometimes
+    # also with automation id "tabs"; only the window's own strip counts.
+    inner = ElementNode(
+        control_type="Tab",
+        automation_id="tabs",
+        children=[tab_item("46 Warnings", "46 Warnings"), tab_item("Debugger", "Debugger")],
+    )
+    editor = ElementNode(control_type="Custom", class_name="AggregatorView", children=[inner])
+    shell = shell_tree()
+    shell.children.insert(0, ElementNode(control_type="Pane", children=[editor]))
+    tabs = ss.read_shell_tabs(shell)
+    assert [t.type_name for t in tabs] == [t.type_name for t in ss.read_shell_tabs(shell_tree())]
+    assert all("Warnings" not in t.caption for t in tabs)
