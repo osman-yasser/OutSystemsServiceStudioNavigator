@@ -6,11 +6,14 @@ Allowed interactions, all scoped to Service Studio windows:
 * UIA ``Invoke`` on a button,
 * UIA ``ValuePattern.SetValue`` on a search box,
 * UIA ``SelectionItem.Select`` on a shell tab,
+* UIA ``Invoke`` on a module tab's own close button, only when the tab's live
+  caption names the expected module and shows no unsaved-changes marker,
 * navigation keys (Up/Down) and Ctrl+O, only after confirming that the
   expected Service Studio window is the foreground window.
 
-Never: Enter, Delete, typing free text, mouse input, closing windows, saving
-or publishing. ``tests/test_read_only_guard.py`` keeps interaction calls out of
+Never: Enter, Delete, typing free text, mouse input, closing windows, closing
+modules with unsaved changes, saving or publishing.
+``tests/test_read_only_guard.py`` keeps interaction calls out of
 every other module.
 """
 
@@ -19,8 +22,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from os_module_navigator.automation import service_studio as ss
 from os_module_navigator.automation.live import foreground_window
-from os_module_navigator.errors import FocusError, NavigatorError
+from os_module_navigator.errors import FocusError, NavigatorError, UnsavedChangesError
 
 # Keys this module may send. Anything else is refused.
 ALLOWED_KEYS: frozenset[str] = frozenset({"{UP}", "{DOWN}", "^o"})
@@ -54,6 +58,34 @@ def set_value(element: Any, text: str) -> None:
 
 def select_item(element: Any) -> None:
     _iface(element, "SelectionItem").Select()
+
+
+def close_module_tab(tab_item: Any, module_name: str) -> None:
+    """Press the close button of a module editor tab after re-checking it live.
+
+    Refuses unless the tab is a module editor tab whose caption names
+    ``module_name`` and shows no unsaved-changes marker, so Service Studio never
+    asks whether to save (which would risk losing work).
+    """
+    if (
+        tab_item.control_type != "TabItem"
+        or ss.classify_tab_type(str(tab_item.name)) is not ss.ShellTabKind.MODULE_EDITOR
+    ):
+        raise NavigatorError("That Service Studio tab is not a module editor tab.")
+    children = list(tab_item.children())
+    caption_text = next((str(c.name) for c in children if c.control_type == "Text" and c.name), "")
+    caption = ss.parse_module_caption(caption_text)
+    if caption is None or not ss.same_module_name(caption.name, module_name):
+        raise NavigatorError("The Service Studio tabs changed; nothing was closed. Retry.")
+    if caption.unsaved:
+        raise UnsavedChangesError(
+            f"{caption.name!r} has unsaved changes; it was not closed. "
+            "Save it in Service Studio first, or close another module."
+        )
+    buttons = [c for c in children if c.control_type == "Button"]
+    if len(buttons) != 1:
+        raise NavigatorError("The module tab's close button was not found; nothing was closed.")
+    invoke(buttons[0])
 
 
 def _foreground_class() -> str:

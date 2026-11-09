@@ -60,3 +60,24 @@ class ServiceStudioStatus(BaseModel):
     dialog_open: str | None = Field(
         default=None, description="Title of a Service Studio dialog currently open, if any."
     )
+
+
+class OpenModule(BaseModel):
+    name: str
+    application: str | None = None
+    unsaved: bool = Field(default=False, description="True when the tab shows unsaved changes.")
+    selected: bool = Field(default=False, description="True for the tab in front.")
+
+
+class OpenModulesResult(BaseModel):
+    count: int = Field(description="Number of module tabs open in Service Studio.")
+    limit: int = Field(description="Maximum number of open modules allowed.")
+    can_open_more: bool = Field(description="True when count < limit.")
+    modules: list[OpenModule]
+
+
+class CloseModuleResult(BaseModel):
+    module_name: str
+    status: str = Field(default="closed")
+    message: str
+    open_modules_count: int = Field(description="Number of module tabs still open.")

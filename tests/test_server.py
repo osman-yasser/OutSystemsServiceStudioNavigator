@@ -9,10 +9,15 @@ from os_module_navigator.errors import (
     AmbiguousModuleError,
     ModuleNotFoundInEnvironmentError,
     ServiceStudioNotRunningError,
+    TooManyOpenModulesError,
+    UnsavedChangesError,
 )
 from os_module_navigator.models import (
+    CloseModuleResult,
     ModuleInfo,
+    OpenModule,
     OpenModuleResult,
+    OpenModulesResult,
     OpenStatus,
     SearchResult,
     ServiceStudioStatus,
@@ -45,6 +50,19 @@ class FakeProvider:
             raise self.error
         return ServiceStudioStatus(running=True, window_detected=True, automation_backend="fake")
 
+    async def get_open_modules(self):
+        if self.error:
+            raise self.error
+        return OpenModulesResult(
+            count=1, limit=10, can_open_more=True, modules=[OpenModule(name="DGA_UI")]
+        )
+
+    async def close_module(self, module_name):
+        self.calls.append(("close", module_name))
+        if self.error:
+            raise self.error
+        return CloseModuleResult(module_name=module_name, message="ok", open_modules_count=0)
+
 
 def call(provider, tool, args=None):
     async def run():
@@ -66,7 +84,15 @@ def test_tools_are_listed_with_annotations():
             return {t.name: t for t in await client.list_tools()}
 
     tools = asyncio.run(run())
-    assert set(tools) == {"search_modules", "open_module", "get_service_studio_status"}
+    assert set(tools) == {
+        "search_modules",
+        "open_module",
+        "get_service_studio_status",
+        "get_open_modules",
+        "close_module",
+    }
+    assert tools["get_open_modules"].annotations.read_only_hint is True
+    assert tools["close_module"].input_schema["required"] == ["module_name"]
     assert tools["search_modules"].annotations.read_only_hint is True
     assert tools["open_module"].annotations.destructive_hint is False
     assert tools["open_module"].input_schema["required"] == ["module_name"]
@@ -127,3 +153,31 @@ def test_unexpected_errors_are_masked():
     with pytest.raises(ToolError) as err:
         call(FakeProvider(RuntimeError("secret internal detail")), "search_modules", {"query": "x"})
     assert "secret internal detail" not in str(err.value)
+
+
+def test_open_modules_and_close():
+    result = call(FakeProvider(), "get_open_modules").structured_content
+    assert result["count"] == 1 and result["can_open_more"] is True
+    assert result["modules"][0]["name"] == "DGA_UI"
+    provider = FakeProvider()
+    closed = call(provider, "close_module", {"module_name": "DGA_UI"}).structured_content
+    assert closed["status"] == "closed"
+    assert provider.calls == [("close", "DGA_UI")]
+
+
+def test_limit_and_unsaved_errors():
+    too_many = TooManyOpenModulesError("10 open", open_modules=["A", "B"])
+    payload = error_payload(FakeProvider(too_many), "open_module", {"module_name": "C"})
+    assert payload["code"] == "too_many_open_modules"
+    assert payload["open_modules"] == ["A", "B"]
+    payload = error_payload(
+        FakeProvider(UnsavedChangesError("unsaved")), "close_module", {"module_name": "A"}
+    )
+    assert payload["code"] == "module_has_unsaved_changes"
+
+
+def test_instructions_tell_agent_about_the_limit():
+    server = build_server(ModuleService(FakeProvider()))
+    assert "get_open_modules" in server.instructions
+    assert "close_module" in server.instructions
+    assert "10" in server.instructions

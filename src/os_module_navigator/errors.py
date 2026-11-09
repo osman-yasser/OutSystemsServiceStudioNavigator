@@ -61,3 +61,25 @@ class FocusError(NavigatorError):
 
 class WrongModuleOpenedError(NavigatorError):
     code = "wrong_module_opened"
+
+
+class ModuleNotOpenError(NavigatorError):
+    code = "module_not_open"
+
+    def __init__(self, message: str, open_modules: list[str]) -> None:
+        super().__init__(message)
+        self.open_modules = open_modules
+
+
+class UnsavedChangesError(NavigatorError):
+    """The module has unsaved changes; closing it would show Service Studio's save prompt."""
+
+    code = "module_has_unsaved_changes"
+
+
+class TooManyOpenModulesError(NavigatorError):
+    code = "too_many_open_modules"
+
+    def __init__(self, message: str, open_modules: list[str]) -> None:
+        super().__init__(message)
+        self.open_modules = open_modules

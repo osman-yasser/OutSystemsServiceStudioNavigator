@@ -32,16 +32,22 @@ from os_module_navigator.errors import (
     AmbiguousModuleError,
     AutomationTimeoutError,
     ModuleNotFoundInEnvironmentError,
+    ModuleNotOpenError,
     NavigatorError,
     NotConnectedError,
     ServiceStudioNotRunningError,
     ServiceStudioWindowNotFoundError,
+    TooManyOpenModulesError,
     UnexpectedDialogError,
+    UnsavedChangesError,
     WrongModuleOpenedError,
 )
 from os_module_navigator.models import (
+    CloseModuleResult,
     ModuleInfo,
+    OpenModule,
     OpenModuleResult,
+    OpenModulesResult,
     OpenStatus,
     SearchResult,
     ServiceStudioStatus,
@@ -108,7 +114,7 @@ class DesktopGUINavigator:
             raise NavigatorError(f"{what} contains control characters.")
         return value
 
-    def _ready_state(self) -> UiState:
+    def _ready_state(self, *, require_connected: bool = True) -> UiState:
         state = self.driver.read_state()
         deadline = self._clock() + self.config.dialog_open_timeout_s
         while (
@@ -120,7 +126,7 @@ class DesktopGUINavigator:
             raise ServiceStudioNotRunningError("Service Studio is not running.")
         if not state.main_window:
             raise ServiceStudioWindowNotFoundError("The Service Studio main window was not found.")
-        if not any(t.kind is ss.ShellTabKind.ENVIRONMENT for t in state.tabs):
+        if require_connected and not any(t.kind is ss.ShellTabKind.ENVIRONMENT for t in state.tabs):
             raise NotConnectedError(
                 "Service Studio does not show a connected environment. Connect and sign in first."
             )
@@ -190,6 +196,66 @@ class DesktopGUINavigator:
             dialog_open=state.dialogs[0] if state.dialogs else None,
         )
 
+    def open_modules(self) -> OpenModulesResult:
+        state = self.driver.read_state()
+        if not state.running:
+            raise ServiceStudioNotRunningError("Service Studio is not running.")
+        if not state.main_window:
+            raise ServiceStudioWindowNotFoundError("The Service Studio main window was not found.")
+        modules = [
+            OpenModule(
+                name=c.name,
+                application=c.application,
+                unsaved=c.unsaved,
+                selected=bool(t.selected),
+            )
+            for _, t, c in _module_tabs(state)
+        ]
+        limit = self.config.max_open_modules
+        return OpenModulesResult(
+            count=len(modules), limit=limit, can_open_more=len(modules) < limit, modules=modules
+        )
+
+    def close(self, module_name: str) -> CloseModuleResult:
+        module_name = self._validate(module_name, "Module name")
+        state = self._ready_state(require_connected=False)
+        tabs = _module_tabs(state)
+        match = next((m for m in tabs if ss.same_module_name(m[2].name, module_name)), None)
+        if match is None:
+            raise ModuleNotOpenError(
+                f"No open module is named {module_name!r}.",
+                open_modules=[c.name for _, _, c in tabs],
+            )
+        index, _, caption = match
+        if caption.unsaved:
+            raise UnsavedChangesError(
+                f"{caption.name!r} has unsaved changes; it was not closed. "
+                "Ask the user to save it in Service Studio, or close another module."
+            )
+        self.driver.close_module_tab(index, caption.name)
+        return self._verify_closed(caption.name)
+
+    def _verify_closed(self, module_name: str) -> CloseModuleResult:
+        deadline = self._clock() + self.config.close_verify_timeout_s
+        while True:
+            self._sleep(self.config.poll_interval_s)
+            state = self.driver.read_state()
+            remaining = [c.name for _, _, c in _module_tabs(state)]
+            if not any(ss.same_module_name(n, module_name) for n in remaining):
+                return CloseModuleResult(
+                    module_name=module_name,
+                    message="The module tab was closed.",
+                    open_modules_count=len(remaining),
+                )
+            unexpected = [d for d in state.dialogs if d not in ss.TRANSIENT_DIALOG_TITLES]
+            if unexpected:
+                raise UnexpectedDialogError(
+                    f"Service Studio showed a dialog ({unexpected[0]!r}) while closing "
+                    f"{module_name!r}. Please handle it in Service Studio."
+                )
+            if self._clock() > deadline:
+                raise AutomationTimeoutError(f"{module_name!r} was still open after closing it.")
+
     def search(self, query: str) -> SearchResult:
         query = self._validate(query, "Query")
         state = self._ready_state()
@@ -215,7 +281,14 @@ class DesktopGUINavigator:
                     tab_caption=tab.caption,
                 )
 
-        known_tabs = {c.name.casefold() for _, _, c in _module_tabs(state)}
+        open_names = [c.name for _, _, c in _module_tabs(state)]
+        if len(open_names) >= self.config.max_open_modules:
+            raise TooManyOpenModulesError(
+                f"{len(open_names)} modules are open (limit {self.config.max_open_modules}). "
+                "Close one with close_module, then open this module.",
+                open_modules=open_names,
+            )
+        known_tabs = {name.casefold() for name in open_names}
 
         def select_and_open() -> None:
             rows = self._search_rows(module_name)
@@ -311,6 +384,12 @@ class DesktopGUIProvider:
 
     async def get_status(self) -> ServiceStudioStatus:
         return await self._run(self._navigator.status)
+
+    async def get_open_modules(self) -> OpenModulesResult:
+        return await self._run(self._navigator.open_modules)
+
+    async def close_module(self, module_name: str) -> CloseModuleResult:
+        return await self._run(lambda: self._navigator.close(module_name))
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

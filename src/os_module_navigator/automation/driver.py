@@ -39,6 +39,7 @@ class ServiceStudioDriver(Protocol):
     def press_open(self) -> None: ...
     def cancel_search_dialog(self) -> None: ...
     def select_tab(self, index: int) -> None: ...
+    def close_module_tab(self, index: int, module_name: str) -> None: ...
 
 
 class LiveServiceStudioDriver:
@@ -53,11 +54,21 @@ class LiveServiceStudioDriver:
     def _windows(self) -> list[live.TopWindow]:
         return live.top_windows(self._pid())
 
+    def _mains(self) -> list[live.TopWindow]:
+        # Past a number of tabs Service Studio opens modules in another main window.
+        # Sort by handle so tab indexes stay stable between reads.
+        mains = [w for w in self._windows() if w.role is ss.WindowRole.MAIN]
+        return sorted(mains, key=lambda w: w.handle.hwnd)
+
     def _main(self) -> live.TopWindow:
-        for window in self._windows():
-            if window.role is ss.WindowRole.MAIN:
-                return window
-        raise ServiceStudioWindowNotFoundError("The Service Studio main window was not found.")
+        mains = self._mains()
+        if not mains:
+            raise ServiceStudioWindowNotFoundError("The Service Studio main window was not found.")
+        return mains[0]
+
+    def _tab_items(self) -> list[Any]:
+        """Live TabItems of every main window, in the same order as ``read_state().tabs``."""
+        return [item for main in self._mains() for item in live.shell_tab_items(main.handle.hwnd)]
 
     def _search_dialog(self) -> live.TopWindow | None:
         for window in self._windows():
@@ -91,10 +102,16 @@ class LiveServiceStudioDriver:
         if pid is None:
             return UiState(running=False, main_window=False)
         windows = live.top_windows(pid)
-        main = next((w for w in windows if w.role is ss.WindowRole.MAIN), None)
-        tabs = ss.read_shell_tabs(live.snapshot_shell(main.handle.hwnd)) if main else []
+        mains = sorted(
+            (w for w in windows if w.role is ss.WindowRole.MAIN), key=lambda w: w.handle.hwnd
+        )
+        tabs = [
+            tab
+            for main in mains
+            for tab in ss.read_shell_tabs(live.snapshot_shell(main.handle.hwnd))
+        ]
         dialogs = [w.title for w in windows if w.role is ss.WindowRole.DIALOG]
-        return UiState(running=True, main_window=main is not None, tabs=tabs, dialogs=dialogs)
+        return UiState(running=True, main_window=bool(mains), tabs=tabs, dialogs=dialogs)
 
     def read_search_rows(self) -> list[ss.ModuleSearchRow]:
         _, webview = self._require_search_dialog()
@@ -148,7 +165,8 @@ class LiveServiceStudioDriver:
 
         # 1) Invoke the environment page's "Search Modules" button (no keyboard needed).
         #    It shows a "Progress" dialog while the module list loads.
-        for webview in live.all_webviews(main.handle.hwnd):
+        webviews = [h for m in self._mains() for h in live.all_webviews(m.handle.hwnd)]
+        for webview in webviews:
             button = live.find_first(
                 webview, control_type="Button", title=ss.SEARCH_MODULES_BUTTON_NAME
             )
@@ -196,7 +214,13 @@ class LiveServiceStudioDriver:
         actions.invoke(self._dialog_element("Button", ss.CANCEL_BUTTON_NAME))
 
     def select_tab(self, index: int) -> None:
-        items = live.shell_tab_items(self._main().handle.hwnd)
+        items = self._tab_items()
         if not 0 <= index < len(items):
             raise NavigatorError("The requested Service Studio tab no longer exists.")
         actions.select_item(items[index])
+
+    def close_module_tab(self, index: int, module_name: str) -> None:
+        items = self._tab_items()
+        if not 0 <= index < len(items):
+            raise NavigatorError("The requested Service Studio tab no longer exists.")
+        actions.close_module_tab(items[index], module_name)

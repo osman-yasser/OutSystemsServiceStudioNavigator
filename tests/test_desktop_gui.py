@@ -9,10 +9,13 @@ from os_module_navigator.errors import (
     AmbiguousModuleError,
     AutomationTimeoutError,
     ModuleNotFoundInEnvironmentError,
+    ModuleNotOpenError,
     NavigatorError,
     NotConnectedError,
     ServiceStudioNotRunningError,
+    TooManyOpenModulesError,
     UnexpectedDialogError,
+    UnsavedChangesError,
     WrongModuleOpenedError,
 )
 from os_module_navigator.models import OpenStatus
@@ -67,6 +70,7 @@ class FakeDriver:
         self.selected_row = 0
         self.calls: list[tuple] = []
         self.open_effect = "open_selected"  # or "nothing", "dialog"
+        self.close_effect = "close"  # or "nothing", "dialog"
 
     def read_state(self):
         self.calls.append(("read_state",))
@@ -116,6 +120,13 @@ class FakeDriver:
         self.calls.append(("select_tab", index))
         for i, tab in enumerate(self.state.tabs):
             tab.selected = i == index
+
+    def close_module_tab(self, index, module_name):
+        self.calls.append(("close_module_tab", index, module_name))
+        if self.close_effect == "close":
+            del self.state.tabs[index]
+        elif self.close_effect == "dialog":
+            self.state.dialogs.append("Unsaved Changes")
 
     def called(self, name):
         return [c for c in self.calls if c[0] == name]
@@ -291,3 +302,104 @@ def test_persistent_progress_dialog_eventually_blocks():
     driver = FakeDriver(CATALOGUE, dialogs=["Progress"])
     with pytest.raises(UnexpectedDialogError):
         navigator(driver, dialog_open_timeout_s=2).search("Other")
+
+
+def many_modules(n: int, *, unsaved: frozenset[int] = frozenset()) -> list[ss.ShellTab]:
+    tabs = [ENV]
+    for i in range(n):
+        marker = "* " if i in unsaved else ""
+        tabs.append(editor(f"{marker}M{i} (App)", selected=i == n - 1))
+    return tabs
+
+
+def test_open_modules_reports_count_limit_and_tabs():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(3, unsaved=frozenset({0})))
+    result = navigator(driver).open_modules()
+    assert result.count == 3 and result.limit == 10 and result.can_open_more
+    assert [m.name for m in result.modules] == ["M0", "M1", "M2"]
+    assert result.modules[0].unsaved and not result.modules[1].unsaved
+    assert result.modules[2].selected and result.modules[0].application == "App"
+
+
+def test_open_modules_at_limit_cannot_open_more():
+    result = navigator(FakeDriver(CATALOGUE, tabs=many_modules(10))).open_modules()
+    assert result.count == 10 and not result.can_open_more
+
+
+def test_open_modules_when_not_running():
+    with pytest.raises(ServiceStudioNotRunningError):
+        navigator(FakeDriver(CATALOGUE, running=False)).open_modules()
+
+
+def test_open_refuses_new_module_at_limit():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(10))
+    with pytest.raises(TooManyOpenModulesError) as err:
+        navigator(driver).open("DGA_UI")
+    assert err.value.open_modules == [f"M{i}" for i in range(10)]
+    assert not driver.called("open_search_dialog")
+
+
+def test_open_at_limit_still_brings_open_module_to_front():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(10))
+    assert navigator(driver).open("m3").status is OpenStatus.ALREADY_OPEN
+
+
+def test_open_limit_is_configurable():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2))
+    with pytest.raises(TooManyOpenModulesError):
+        navigator(driver, max_open_modules=2).open("DGA_UI")
+
+
+def test_close_saved_module():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(10))
+    result = navigator(driver).close("m4")
+    assert result.module_name == "M4" and result.status == "closed"
+    assert result.open_modules_count == 9
+    assert driver.called("close_module_tab") == [("close_module_tab", 5, "M4")]
+
+
+def test_close_refuses_unsaved_module():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(3, unsaved=frozenset({1})))
+    with pytest.raises(UnsavedChangesError):
+        navigator(driver).close("M1")
+    assert not driver.called("close_module_tab")
+
+
+def test_close_unknown_module_lists_open_ones():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2))
+    with pytest.raises(ModuleNotOpenError) as err:
+        navigator(driver).close("Nope")
+    assert err.value.open_modules == ["M0", "M1"]
+    assert not driver.called("close_module_tab")
+
+
+def test_close_never_touches_environment_tab():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(1))
+    with pytest.raises(ModuleNotOpenError):
+        navigator(driver).close("Dev - host")
+
+
+def test_close_works_without_environment_connection():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2)[1:])
+    assert navigator(driver).close("M0").open_modules_count == 1
+
+
+def test_close_reports_dialog():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2))
+    driver.close_effect = "dialog"
+    with pytest.raises(UnexpectedDialogError):
+        navigator(driver).close("M0")
+
+
+def test_close_times_out_when_tab_stays():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2))
+    driver.close_effect = "nothing"
+    with pytest.raises(AutomationTimeoutError):
+        navigator(driver, close_verify_timeout_s=2).close("M0")
+
+
+def test_close_blocked_by_unexpected_dialog():
+    driver = FakeDriver(CATALOGUE, tabs=many_modules(2), dialogs=["Some Dialog"])
+    with pytest.raises(UnexpectedDialogError):
+        navigator(driver).close("M0")
+    assert not driver.called("close_module_tab")

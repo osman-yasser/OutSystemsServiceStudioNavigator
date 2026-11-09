@@ -15,13 +15,27 @@ OutSystems MCP. Background: [docs/phase1-findings.md](docs/phase1-findings.md),
 |---|---|
 | `get_service_studio_status()` | Running? window found? backend, connected environment, module in front (+ unsaved flag), open modules, open dialog |
 | `search_modules(query)` | Searches module name / application / author via *Open from Environment*; returns name, application, changed, by |
-| `open_module(module_name)` | Opens the module with this exact name (case-insensitive) and verifies its tab; brings an already-open module to the front |
+| `open_module(module_name)` | Opens the module with this exact name (case-insensitive) and verifies its tab; brings an already-open module to the front. Refuses to open a new module when 10 are already open |
+| `get_open_modules()` | Number of open modules, the limit (10), `can_open_more`, and each open module's name, application, unsaved flag and whether it is in front |
+| `close_module(module_name)` | Closes an open module's tab and verifies it is gone. Refuses modules with unsaved changes |
+
+### Open-module limit
+
+Past a certain number of tabs Service Studio opens modules in a separate
+window. The server tells the agent (in its MCP instructions and tool
+descriptions) to keep at most **10** modules open: before opening a module
+that is not open yet, call `get_open_modules`; if `count >= 10`, call
+`close_module` on a saved module it no longer needs, then `open_module`.
+`open_module` enforces the same limit (`too_many_open_modules`). Change the
+limit with `OS_NAV_MAX_OPEN_MODULES`.
 
 Errors come back as tool errors whose text is JSON:
 `{"code": "...", "message": "...", "candidates"|"suggestions": [...]}`. Codes:
 `service_studio_not_running`, `window_not_found`, `not_connected`,
 `unexpected_dialog`, `search_dialog_unavailable`, `module_not_found`,
-`ambiguous_module`, `automation_timeout`, `focus_error`, `wrong_module_opened`.
+`ambiguous_module`, `automation_timeout`, `focus_error`, `wrong_module_opened`,
+`too_many_open_modules`, `module_not_open`, `module_has_unsaved_changes`
+(the last three include `open_modules` where relevant).
 
 ## Setup
 
@@ -63,7 +77,13 @@ Safety rules, enforced by `tests/test_read_only_guard.py`:
 - All GUI input lives in `automation/actions.py`: UIA focus / invoke / set value /
   tab select, plus Up, Down and Ctrl+O only, sent after checking that Service
   Studio is the foreground window.
-- Never Enter, mouse clicks, closing windows, saving or publishing.
+- Closing a module invokes that module tab's own close button, only after
+  re-reading the tab live and confirming it names the expected module and has
+  no unsaved-changes marker (`*`), so Service Studio never asks to save.
+- Never Enter, mouse clicks, closing windows, closing unsaved modules, saving
+  or publishing.
+- Tabs are read from every Service Studio main window, so modules that spilled
+  into a second window are still counted.
 - All UI work runs serially on one dedicated thread.
 
 ## Diagnostic
