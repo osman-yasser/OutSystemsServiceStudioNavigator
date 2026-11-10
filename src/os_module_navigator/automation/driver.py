@@ -213,14 +213,23 @@ class LiveServiceStudioDriver:
             return
         actions.invoke(self._dialog_element("Button", ss.CANCEL_BUTTON_NAME))
 
+    def _tab_item_at(self, index: int, *, attempts: int = 6, delay_s: float = 0.5) -> Any:
+        """Live TabItem at ``index``, retrying while the UIA tree is transiently incomplete.
+
+        ``live.shell_tab_items`` returns ``[]`` when a UIA call fails (Service Studio busy
+        loading a module), which used to surface as "tab no longer exists" even though
+        the tab was still there. Retry before giving up.
+        """
+        for attempt in range(attempts):
+            items = self._tab_items()
+            if 0 <= index < len(items):
+                return items[index]
+            if attempt < attempts - 1:
+                time.sleep(delay_s)
+        raise NavigatorError("The requested Service Studio tab no longer exists.")
+
     def select_tab(self, index: int) -> None:
-        items = self._tab_items()
-        if not 0 <= index < len(items):
-            raise NavigatorError("The requested Service Studio tab no longer exists.")
-        actions.select_item(items[index])
+        actions.select_item(self._tab_item_at(index))
 
     def close_module_tab(self, index: int, module_name: str) -> None:
-        items = self._tab_items()
-        if not 0 <= index < len(items):
-            raise NavigatorError("The requested Service Studio tab no longer exists.")
-        actions.close_module_tab(items[index], module_name)
+        actions.close_module_tab(self._tab_item_at(index), module_name)
