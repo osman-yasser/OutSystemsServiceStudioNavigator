@@ -1,14 +1,18 @@
 [project]
 name = "os-module-navigator"
 version = "0.1.0"
-description = "Local MCP server that navigates the OutSystems Service Studio 11 desktop GUI to find and open modules."
+description = "Local MCP server that drives the OutSystems Service Studio 11 desktop GUI (Windows and macOS): find and open modules, manage dependencies and find usages."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=4.1.5",
     "psutil>=7.2.2",
     "pydantic>=2.14.2",
-    "pywinauto>=0.6.9",
+    "pywinauto>=0.6.9; sys_platform == 'win32'",
+    "pyobjc-framework-ApplicationServices>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Vision>=11.0; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

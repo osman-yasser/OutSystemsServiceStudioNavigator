@@ -29,6 +29,12 @@ class UnexpectedDialogError(NavigatorError):
     code = "unexpected_dialog"
 
 
+class PermissionMissingError(NavigatorError):
+    """macOS has not granted the Accessibility or Screen Recording permission."""
+
+    code = "permission_missing"
+
+
 class SearchDialogUnavailableError(NavigatorError):
     code = "search_dialog_unavailable"
 
@@ -83,3 +89,63 @@ class TooManyOpenModulesError(NavigatorError):
     def __init__(self, message: str, open_modules: list[str]) -> None:
         super().__init__(message)
         self.open_modules = open_modules
+
+
+class DependenciesDialogUnavailableError(NavigatorError):
+    code = "dependencies_dialog_unavailable"
+
+
+class DependencyNotFoundError(NavigatorError):
+    code = "dependency_not_found"
+
+    def __init__(self, message: str, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
+class AmbiguousDependencyError(NavigatorError):
+    code = "ambiguous_dependency"
+
+    def __init__(self, message: str, candidates: list[str]) -> None:
+        super().__init__(message)
+        self.candidates = candidates
+
+
+class WrongDependencySelectedError(NavigatorError):
+    code = "wrong_dependency_selected"
+
+
+class DependencyChangeFailedError(NavigatorError):
+    code = "dependency_change_failed"
+
+
+class DependencyElementNotFoundError(NavigatorError):
+    code = "dependency_element_not_found"
+
+    def __init__(self, message: str, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
+class AmbiguousDependencyElementError(NavigatorError):
+    code = "ambiguous_dependency_element"
+
+    def __init__(self, message: str, candidates: list[str]) -> None:
+        super().__init__(message)
+        self.candidates = candidates
+
+
+class ElementNotFoundError(NavigatorError):
+    """The module search did not open exactly one element with that name."""
+
+    code = "element_not_found"
+
+
+class UsagesUnavailableError(NavigatorError):
+    """Find Usages could not be started or its results could not be read."""
+
+    code = "usages_unavailable"
+
+
+class UnsupportedPlatformError(NavigatorError):
+    code = "unsupported_platform"

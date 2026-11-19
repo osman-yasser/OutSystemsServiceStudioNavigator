@@ -9,8 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import psutil
-import win32gui
-import win32process
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +35,9 @@ def find_process_ids(image_name: str) -> list[int]:
 
 
 def _describe(hwnd: int, *, top_level: bool) -> WindowHandle | None:
+    import win32gui
+    import win32process
+
     try:
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         return WindowHandle(
@@ -58,6 +59,9 @@ def list_process_windows(pid: int, *, include_children: bool = True) -> list[Win
     Window titles are deliberately not collected: they can contain module or
     environment names. Use UI Automation (with sanitization) for labels instead.
     """
+    import win32gui
+    import win32process
+
     top_level: list[int] = []
 
     def _collect(hwnd: int, acc: list[int]) -> bool:

@@ -8,8 +8,9 @@ Allowed interactions, all scoped to Service Studio windows:
 * UIA ``SelectionItem.Select`` on a shell tab,
 * UIA ``Invoke`` on a module tab's own close button, only when the tab's live
   caption names the expected module and shows no unsaved-changes marker,
-* navigation keys (Up/Down) and Ctrl+O, only after confirming that the
-  expected Service Studio window is the foreground window.
+* navigation keys (Up/Down), Ctrl+O (Open from Environment), Ctrl+Q (Manage
+  Dependencies) and Space (toggle a focused dependency checkbox), only after
+  confirming that the expected Service Studio window is the foreground window.
 
 Never: Enter, Delete, typing free text, mouse input, closing windows, closing
 modules with unsaved changes, saving or publishing.
@@ -27,7 +28,7 @@ from os_module_navigator.automation.live import foreground_window
 from os_module_navigator.errors import FocusError, NavigatorError, UnsavedChangesError
 
 # Keys this module may send. Anything else is refused.
-ALLOWED_KEYS: frozenset[str] = frozenset({"{UP}", "{DOWN}", "^o"})
+ALLOWED_KEYS: frozenset[str] = frozenset({"{UP}", "{DOWN}", "^o", "^q", "{SPACE}"})
 
 
 def _iface(element: Any, pattern: str) -> Any:
@@ -150,3 +151,10 @@ def press_keys(
             )
         keyboard.send_keys(key)
         time.sleep(delay_s)
+
+
+def toggle_focused_checkbox(hwnd: int, checkbox: Any, *, delay_s: float = 0.15) -> None:
+    """Flip a dependency checkbox: focus it, then press Space (UIA Toggle does nothing here)."""
+    ensure_foreground(hwnd, checkbox)
+    set_focus(checkbox)
+    press_keys(hwnd, ["{SPACE}"], delay_s=delay_s)

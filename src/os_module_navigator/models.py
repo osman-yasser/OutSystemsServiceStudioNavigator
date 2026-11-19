@@ -81,3 +81,43 @@ class CloseModuleResult(BaseModel):
     status: str = Field(default="closed")
     message: str
     open_modules_count: int = Field(description="Number of module tabs still open.")
+
+
+class DependencyChangeResult(BaseModel):
+    module_name: str
+    dependency_name: str
+    action: str = Field(description="'add', 'remove' or 'refresh'.")
+    elements: list[str] = Field(
+        default_factory=list,
+        description="Elements that were changed; empty means the whole module.",
+    )
+    status: str = Field(
+        description="'applied', 'already_present' (add: nothing to do), "
+        "'not_a_dependency' (remove: nothing to do) or 'up_to_date' (refresh: nothing to do)."
+    )
+    message: str
+
+
+class ModuleUsages(BaseModel):
+    module_name: str
+    usages: int = Field(description="Number of usages Service Studio counts in that module.")
+    is_producer: bool = Field(
+        default=False, description="True for the module that owns the element ('(local)')."
+    )
+
+
+class FindUsagesResult(BaseModel):
+    module_name: str = Field(description="Module that owns the element.")
+    element_name: str
+    total_usages: int = Field(description="Total from the pane footer.")
+    consumer_modules_count: int = Field(
+        description="Modules with usages, from the pane footer (includes the owner if it "
+        "uses the element itself)."
+    )
+    modules: list[ModuleUsages]
+    possibly_truncated: bool = Field(
+        default=False,
+        description="True when fewer rows were read than the footer reports (the list "
+        "is longer than the pane shows).",
+    )
+    message: str

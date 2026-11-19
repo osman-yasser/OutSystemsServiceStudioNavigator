@@ -7,6 +7,8 @@ from fastmcp.exceptions import ToolError
 
 from os_module_navigator.errors import (
     AmbiguousModuleError,
+    DependencyNotFoundError,
+    ElementNotFoundError,
     ModuleNotFoundInEnvironmentError,
     ServiceStudioNotRunningError,
     TooManyOpenModulesError,
@@ -14,7 +16,10 @@ from os_module_navigator.errors import (
 )
 from os_module_navigator.models import (
     CloseModuleResult,
+    DependencyChangeResult,
+    FindUsagesResult,
     ModuleInfo,
+    ModuleUsages,
     OpenModule,
     OpenModuleResult,
     OpenModulesResult,
@@ -63,6 +68,58 @@ class FakeProvider:
             raise self.error
         return CloseModuleResult(module_name=module_name, message="ok", open_modules_count=0)
 
+    async def add_dependency(self, module_name, dependency_name, elements=None):
+        self.calls.append(("add_dependency", module_name, dependency_name, elements))
+        if self.error:
+            raise self.error
+        return DependencyChangeResult(
+            module_name=module_name,
+            dependency_name=dependency_name,
+            action="add",
+            status="applied",
+            message="ok",
+        )
+
+    async def remove_dependency(self, module_name, dependency_name, elements=None):
+        self.calls.append(("remove_dependency", module_name, dependency_name, elements))
+        if self.error:
+            raise self.error
+        return DependencyChangeResult(
+            module_name=module_name,
+            dependency_name=dependency_name,
+            action="remove",
+            status="applied",
+            message="ok",
+        )
+
+    async def refresh_dependencies(self, module_name, dependency_name=None):
+        self.calls.append(("refresh_dependencies", module_name, dependency_name))
+        if self.error:
+            raise self.error
+        return DependencyChangeResult(
+            module_name=module_name,
+            dependency_name=dependency_name or "",
+            action="refresh",
+            status="up_to_date",
+            message="ok",
+        )
+
+    async def find_usages(self, module_name, element_name):
+        self.calls.append(("find_usages", module_name, element_name))
+        if self.error:
+            raise self.error
+        return FindUsagesResult(
+            module_name=module_name,
+            element_name=element_name,
+            total_usages=20,
+            consumer_modules_count=2,
+            modules=[
+                ModuleUsages(module_name=module_name, usages=14, is_producer=True),
+                ModuleUsages(module_name="Shipping_BL", usages=6),
+            ],
+            message="ok",
+        )
+
 
 def call(provider, tool, args=None):
     async def run():
@@ -90,7 +147,13 @@ def test_tools_are_listed_with_annotations():
         "get_service_studio_status",
         "get_open_modules",
         "close_module",
+        "add_dependency",
+        "remove_dependency",
+        "refresh_dependencies",
+        "find_usages",
     }
+    assert tools["find_usages"].annotations.read_only_hint is True
+    assert tools["find_usages"].input_schema["required"] == ["module_name", "element_name"]
     assert tools["get_open_modules"].annotations.read_only_hint is True
     assert tools["close_module"].input_schema["required"] == ["module_name"]
     assert tools["search_modules"].annotations.read_only_hint is True
@@ -181,3 +244,72 @@ def test_instructions_tell_agent_about_the_limit():
     assert "get_open_modules" in server.instructions
     assert "close_module" in server.instructions
     assert "10" in server.instructions
+
+
+def test_add_and_remove_dependency_tools():
+    provider = FakeProvider()
+    added = call(provider, "add_dependency", {"module_name": "M1", "dependency_name": "Charts"})
+    removed = call(
+        provider, "remove_dependency", {"module_name": "M1", "dependency_name": "Charts"}
+    )
+    assert added.structured_content["action"] == "add"
+    assert removed.structured_content["action"] == "remove"
+    assert provider.calls == [
+        ("add_dependency", "M1", "Charts", None),
+        ("remove_dependency", "M1", "Charts", None),
+    ]
+
+
+def test_refresh_dependencies_tool():
+    provider = FakeProvider()
+    every = call(provider, "refresh_dependencies", {"module_name": "M1"})
+    one = call(provider, "refresh_dependencies", {"module_name": "M1", "dependency_name": "Charts"})
+    assert every.structured_content["action"] == "refresh"
+    assert one.structured_content["status"] == "up_to_date"
+    assert provider.calls == [
+        ("refresh_dependencies", "M1", None),
+        ("refresh_dependencies", "M1", "Charts"),
+    ]
+
+
+def test_dependency_not_found_error_carries_suggestions():
+    provider = FakeProvider(DependencyNotFoundError("nope", suggestions=["OutSystemsUI"]))
+    payload = error_payload(
+        provider, "add_dependency", {"module_name": "M1", "dependency_name": "Out"}
+    )
+    assert payload["code"] == "dependency_not_found"
+    assert payload["suggestions"] == ["OutSystemsUI"]
+
+
+def test_elements_are_passed_to_the_provider():
+    provider = FakeProvider()
+    call(
+        provider,
+        "add_dependency",
+        {"module_name": "M1", "dependency_name": "Charts", "elements": ["DonutChart"]},
+    )
+    assert provider.calls == [("add_dependency", "M1", "Charts", ["DonutChart"])]
+
+
+def test_find_usages_tool():
+    provider = FakeProvider()
+    result = call(
+        provider,
+        "find_usages",
+        {"module_name": "Orders_BL", "element_name": "Order_CreateOrUpdateWrapper"},
+    )
+    data = result.structured_content
+    assert data["total_usages"] == 20
+    assert [m["module_name"] for m in data["modules"]] == ["Orders_BL", "Shipping_BL"]
+    assert data["modules"][0]["is_producer"] is True
+    assert provider.calls == [("find_usages", "Orders_BL", "Order_CreateOrUpdateWrapper")]
+
+
+def test_find_usages_element_not_found_error():
+    provider = FakeProvider(ElementNotFoundError("nope"))
+    payload = error_payload(provider, "find_usages", {"module_name": "M", "element_name": "X"})
+    assert payload["code"] == "element_not_found"
+
+
+def test_instructions_mention_find_usages():
+    assert "find_usages" in __import__("os_module_navigator.server").server.INSTRUCTIONS

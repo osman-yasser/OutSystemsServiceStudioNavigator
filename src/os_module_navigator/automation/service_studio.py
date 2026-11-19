@@ -19,11 +19,14 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from os_module_navigator.automation.uia import ElementNode
-from os_module_navigator.automation.windows import WindowHandle
+
+if TYPE_CHECKING:
+    from os_module_navigator.automation.windows import WindowHandle
 
 PROCESS_NAME = "ServiceStudio.exe"
 SHELL_WIN32_CLASS_PREFIX = "Avalonia-"
@@ -38,7 +41,20 @@ UNSAVED_MARKER = "*"
 SEARCH_MODULES_BUTTON_NAME = "Search Modules"
 MODULE_SEARCH_EDIT_NAME = "Search for Module Name, Application Name or Author"
 OPEN_BUTTON_NAME = "Open"
+MANAGE_DEPENDENCIES_TITLE = "Manage Dependencies"
+DEPENDENCY_MODULE_SEARCH_EDIT_NAME = "Search modules"
+DEPENDENCY_ELEMENT_SEARCH_EDIT_NAME = "Search public elements"
+APPLY_BUTTON_NAME = "Apply"
+ALL_FILTER_BUTTON_NAME = "All"
+REFRESH_ALL_BUTTON_NAME = "Refresh all"
+REFRESH_BUTTON_NAME = "Refresh"
+NO_BUTTON_NAME = "No"
+# Shown after Apply when the module still has outdated/missing references.
+OUTDATED_REFERENCES_TITLE = "Modified or missing references found"
+EXTENSION_TAG = "(extension)"
 CANCEL_BUTTON_NAME = "Cancel"
+LOCAL_USAGES_LABEL = "(local)"
+MAIN_WINDOW_TITLE = "Service Studio"
 
 
 class ShellTabKind(StrEnum):
@@ -291,6 +307,15 @@ def is_webview(window: WindowHandle) -> bool:
     return window.class_name == WEBVIEW_WIN32_CLASS
 
 
+class UsagesPane(BaseModel):
+    """Service Studio's Find Usages pane (all modules), as read from the screen."""
+
+    title: str  # the element name inside the pane tab's quotes, possibly cut short
+    rows: list[tuple[str, int]]  # (module name, or LOCAL_USAGES_LABEL for the module itself)
+    total_usages: int
+    consumer_modules: int
+
+
 class ModuleCaption(BaseModel):
     name: str
     application: str | None = None
@@ -315,6 +340,35 @@ def parse_module_caption(caption: str) -> ModuleCaption | None:
             unsaved=unsaved,
         )
     return ModuleCaption(name=text, unsaved=unsaved)
+
+
+# Characters OCR confuses in UI fonts (I/l/1/|, O/0), folded after casefold().
+_CONFUSABLES = str.maketrans({"l": "i", "1": "i", "|": "i", "!": "i", "0": "o"})
+
+
+def _fold_confusables(text: str) -> str:
+    return text.translate(_CONFUSABLES)
+
+
+def fold_ocr(text: str) -> str:
+    """Casefolded, whitespace-normalized, with OCR-confusable characters folded."""
+    return _fold_confusables(" ".join(text.split()).casefold())
+
+
+def same_tree_label(label: str, name: str) -> bool:
+    """True if a dependency-tree label read by OCR shows ``name``.
+
+    On macOS, Vision sometimes reads the icon in front of a module or element
+    name as a few characters (e.g. "JO PdfTools_IS"). OutSystems module and
+    element names contain no spaces, so a prefix of at most 3 characters before
+    the last space is treated as that icon.
+    """
+    label_n = _fold_confusables(" ".join(label.split()).casefold())
+    name_n = _fold_confusables(" ".join(name.split()).casefold())
+    if label_n == name_n:
+        return True
+    prefix, sep, rest = label_n.rpartition(" ")
+    return bool(sep) and rest == name_n and len(prefix) <= 3
 
 
 def same_module_name(a: str, b: str) -> bool:

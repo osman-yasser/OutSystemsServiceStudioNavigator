@@ -1,12 +1,15 @@
 # OutSystems O11 Module Navigator MCP
 
-A local MCP server that lets Codex drive the **OutSystems Service Studio 11
-desktop app** to search for and open modules, so the official OutSystems MCP
-can work on them without a manual "open module" step.
+A local MCP server that lets an agent (Claude Code, Codex, ...) drive the
+**OutSystems Service Studio 11 desktop app**: search for and open modules,
+manage their dependencies and find the usages of an element across all
+modules. The official OutSystems (`servicestudio`) MCP only works on modules
+that are open in Service Studio and cannot change dependencies or list
+consumers; this server covers those steps.
 
-Status: **Phase 3 — MCP server.** All three tools work over stdio against a
-live Service Studio. Still to do: a run from inside Codex alongside the official
-OutSystems MCP. Background: [docs/phase1-findings.md](docs/phase1-findings.md),
+Runs on Windows (UI Automation) and macOS (Accessibility + on-device OCR, see
+[docs/macos.md](docs/macos.md)). Background:
+[docs/phase1-findings.md](docs/phase1-findings.md),
 [docs/phase2-live-verification.md](docs/phase2-live-verification.md).
 
 ## Tools
@@ -18,6 +21,10 @@ OutSystems MCP. Background: [docs/phase1-findings.md](docs/phase1-findings.md),
 | `open_module(module_name)` | Opens the module with this exact name (case-insensitive) and verifies its tab; brings an already-open module to the front. Refuses to open a new module when 10 are already open |
 | `get_open_modules()` | Number of open modules, the limit (10), `can_open_more`, and each open module's name, application, unsaved flag and whether it is in front |
 | `close_module(module_name)` | Closes an open module's tab and verifies it is gone. Refuses modules with unsaved changes |
+| `add_dependency(module_name, dependency_name)` | Adds a dependency on **all public elements** of another module/extension through *Manage Dependencies* (Ctrl+Q on Windows; the toolbar button on macOS): searches, selects the row, picks the elements panel's *All* filter, ticks the module, presses *Apply* and waits for the dialog to close. The module must be open. Returns `applied` or `already_present` (also when only some elements are referenced). Optional `elements` adds only those public elements (exact names) |
+| `remove_dependency(module_name, dependency_name)` | Same dialog, unticks the dependency and applies. Returns `applied` or `not_a_dependency`; optional `elements` removes only those. If Service Studio asks about outdated references after Apply, the server answers No, presses *Refresh all* and applies again. Any other dialog is reported as `unexpected_dialog` |
+| `refresh_dependencies(module_name, dependency_name=None)` | Refreshes outdated or missing references through *Manage Dependencies*: *Refresh all* with no dependency, or only that dependency's *Refresh*, then *Apply*. Returns `applied` or `up_to_date` (nothing outdated). The per-dependency *Refresh* button and the apply path after a refresh have only been exercised against fakes so far |
+| `find_usages(module_name, element_name)` | Runs *Find Usages in all Modules* on an element of an open module (macOS only for now): opens the element from the module search drop-down (Cmd+F), right-clicks its row in the elements tree, clicks the menu item and reads the result pane. Returns each module with its usage count (`is_producer` marks the owner, Service Studio's "(local)"), the footer totals and `possibly_truncated`. Changes nothing |
 
 ### Open-module limit
 
@@ -31,17 +38,34 @@ limit with `OS_NAV_MAX_OPEN_MODULES`.
 
 Errors come back as tool errors whose text is JSON:
 `{"code": "...", "message": "...", "candidates"|"suggestions": [...]}`. Codes:
-`service_studio_not_running`, `window_not_found`, `not_connected`,
-`unexpected_dialog`, `search_dialog_unavailable`, `module_not_found`,
-`ambiguous_module`, `automation_timeout`, `focus_error`, `wrong_module_opened`,
-`too_many_open_modules`, `module_not_open`, `module_has_unsaved_changes`
-(the last three include `open_modules` where relevant).
+
+- Service Studio state: `service_studio_not_running`, `window_not_found`,
+  `not_connected`, `unexpected_dialog`, `focus_error`, `automation_timeout`,
+  `permission_missing` (macOS), `unsupported_platform`.
+- Modules: `search_dialog_unavailable`, `module_not_found`, `ambiguous_module`,
+  `wrong_module_opened`, `too_many_open_modules`, `module_not_open`,
+  `module_has_unsaved_changes` (the last three include `open_modules`).
+- Dependencies: `dependencies_dialog_unavailable`, `dependency_not_found`,
+  `ambiguous_dependency`, `wrong_dependency_selected`, `dependency_change_failed`,
+  `dependency_element_not_found`, `ambiguous_dependency_element`.
+- Usages: `element_not_found`, `usages_unavailable`.
 
 ## Setup
 
 ```
 uv sync
 ```
+
+## Use with Claude Code
+
+```
+claude mcp add --scope user outsystems-module-navigator -- \
+  ~/.local/bin/uv --directory /path/to/OutSystemsServiceStudioNavigator \
+  run --quiet os-module-navigator
+```
+
+After changing the server's code, reconnect it (`/mcp` in Claude Code) so the
+new version is loaded.
 
 ## Use with Codex
 
@@ -59,7 +83,23 @@ Then restart Codex and check with `codex mcp list`. Keep the official
 `servicestudio` MCP enabled too: this server opens the module, the official one
 edits it.
 
-## How it works
+## Use on macOS
+
+Works with Service Studio for Mac; see [docs/macos.md](docs/macos.md) for how
+it differs from Windows (the search dialog is read with on-device OCR).
+
+1. Install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`) and run `uv sync`.
+2. Grant the app that launches the server (VS Code, Terminal, iTerm, ...)
+   **Accessibility** and **Screen & System Audio Recording** in System Settings →
+   Privacy & Security, then restart that app.
+3. Register it with your MCP client (see *Use with Claude Code* above).
+
+On macOS the server brings Service Studio to the front while it works and
+reads the screen, so avoid typing in Service Studio during a call. The safety
+rules for macOS input are in [docs/macos.md](docs/macos.md) and are enforced by
+`tests/test_read_only_guard.py`.
+
+## How it works (Windows)
 
 1. Find `ServiceStudio.exe` and its Avalonia main window (attached by handle).
 2. Check that an environment tab is open and no unexpected dialog is showing.
@@ -115,7 +155,7 @@ uv run pytest
 
 ```
 src/os_module_navigator/
-  models.py                   # ModuleInfo, SearchResult, OpenModuleResult, ServiceStudioStatus
+  models.py                   # tool results (modules, dependencies, usages, status)
   errors.py                   # NavigatorError subclasses with stable codes
   config.py                   # timeouts and limits
   diagnostics.py              # Phase 1 CLI (os-nav-diagnose)
@@ -130,7 +170,11 @@ src/os_module_navigator/
     sanitize.py               # redaction of content labels
     service_studio.py         # Service Studio structure: tabs, dialogs, results table
     live.py                   # read-only lookups on the live UI
-    actions.py                # the only module that sends input
-    driver.py                 # ServiceStudioDriver protocol + live implementation
+    actions.py                # the only module that sends input (Windows)
+    driver.py                 # ServiceStudioDriver protocol + Windows implementation
+    mac_ax.py                 # read-only Accessibility lookups (macOS)
+    mac_ocr.py                # screenshots + Vision OCR parsers (macOS)
+    mac_actions.py            # the only module that sends input (macOS)
+    mac_driver.py             # ServiceStudioDriver implementation (macOS)
 tests/
 ```
