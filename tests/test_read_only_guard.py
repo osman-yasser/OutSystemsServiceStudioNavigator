@@ -20,7 +20,7 @@ ACTIONS_CALL = re.compile(r"\bactions\.\w+\(")
 
 # Never allowed anywhere, including actions.py.
 NEVER = re.compile(
-    r"(pyautogui|click_input|mouse_event|\{ENTER\}|\{DELETE\}|\{DEL\}|\^s|"
+    r"(pyautogui|click_input|mouse_event|\{DELETE\}|\{DEL\}|\^s|"
     r"PART_CloseButton|Publish\()"
 )
 
@@ -46,3 +46,23 @@ def test_actions_module_never_clicks_saves_closes_or_presses_enter():
     ]
     offenders = [f"{n}: {line.strip()}" for n, line in code_lines if NEVER.search(line)]
     assert offenders == []
+
+
+ENTER = re.compile(r"\{ENTER\}")
+
+
+def test_enter_is_only_defined_once_in_actions_module():
+    """Enter may only be sent by actions.press_enter_on (focus-checked), nowhere else."""
+    offenders = [
+        f"{path.relative_to(SRC)}:{lineno}"
+        for path in SRC.rglob("*.py")
+        if path != ACTIONS
+        for lineno, line in _lines(path)
+        if ENTER.search(line)
+    ]
+    assert offenders == []
+    code = [line for _, line in _lines(ACTIONS) if not line.lstrip().startswith(("#", "*"))]
+    assert sum(bool(ENTER.search(line)) for line in code) == 1
+    from os_module_navigator.automation.actions import ALLOWED_KEYS
+
+    assert "{ENTER}" not in ALLOWED_KEYS

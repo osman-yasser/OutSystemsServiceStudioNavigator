@@ -219,3 +219,118 @@ def test_read_shell_tabs_ignores_inner_editor_tab_strips():
     tabs = ss.read_shell_tabs(shell)
     assert [t.type_name for t in tabs] == [t.type_name for t in ss.read_shell_tabs(shell_tree())]
     assert all("Warnings" not in t.caption for t in tabs)
+
+
+# --- Find Usages in all Modules ----------------------------------------------------
+def _icon() -> ElementNode:
+    return ElementNode(control_type="Image")
+
+
+def _text(name: str, left: int = 0, top: int = 0) -> ElementNode:
+    return ElementNode(
+        control_type="Text", name=name, rect={"left": left, "top": top, "width": 50, "height": 16}
+    )
+
+
+def test_parse_quick_search_skips_actions_and_keeps_categories():
+    popup = ElementNode(
+        control_type="Group",
+        name="Search in X ...",
+        keyboard_focusable=True,
+        rect={"left": 2130, "top": 76, "width": 400, "height": 300},
+        children=[
+            _icon(),
+            _text("Search in WB_X"),
+            _icon(),
+            _text("Search in this Module"),
+            _icon(),
+            _text("Search for Help"),
+            _text("Interface"),
+            _icon(),
+            _text("WB_PropertyData"),
+            _icon(),
+            _text("WB_Other"),
+            _text("Logic"),
+            _icon(),
+            _text("WB_PropertyData"),
+        ],
+    )
+    root = ElementNode(control_type="Document", children=[popup])
+    assert ss.find_quick_search_popup(root) is popup
+    assert ss.parse_quick_search(popup) == [
+        ss.QuickSearchResult(category="Interface", name="WB_PropertyData"),
+        ss.QuickSearchResult(category="Interface", name="WB_Other"),
+        ss.QuickSearchResult(category="Logic", name="WB_PropertyData"),
+    ]
+
+
+def test_element_type_from_context_menu():
+    items = ["Find Usages", "Find Usages in all Modules", "Delete", "Help with 'Server Action'"]
+    assert ss.element_type_from_menu(items) == "Server Action"
+    assert ss.element_type_from_menu(["Copy"]) is None
+
+
+def test_parse_usage_count():
+    assert ss.parse_usage_count("No usages") == 0
+    assert ss.parse_usage_count("1 usage") == 1
+    assert ss.parse_usage_count("12 usages") == 12
+    assert ss.parse_usage_count("Loading") is None
+
+
+def test_usages_tab_element():
+    assert ss.usages_tab_element("'WB_A' usages in all modules") == "WB_A"
+    assert ss.usages_tab_element("1 Warning") is None
+
+
+def usages_panel_tree(caption: str = "'WB_Geo' usages in all modules", summary: bool = True):
+    def header(name: str, left: int) -> ElementNode:
+        return ElementNode(
+            control_type="Header",
+            name=name,
+            rect={"left": left, "top": 1074, "width": 200, "height": 26},
+        )
+
+    cells = [
+        _text("(local)", 201, 1103),
+        _text("1 usage", 402, 1103),
+        _text("MRPolicyManagement_CW", 201, 1128),
+        _text("1 usage", 402, 1128),
+        _text("SimuladorMRH", 201, 1153),
+        _text("No usages", 402, 1153),
+    ]
+    table = ElementNode(
+        control_type="Table",
+        children=[
+            header("Module Name", 197),
+            header("Usages", 397),
+            ElementNode(control_type="DataItem", children=cells),
+        ],
+    )
+    tab = ElementNode(
+        control_type="TabItem",
+        name=f"{caption} Close tab",
+        automation_id="bp3-tab-title_bottom-pane-tabs_findConsumersPane",
+        children=[ElementNode(control_type="Text", name=caption)],
+    )
+    parts = [tab, table]
+    if summary:
+        parts.append(_text("2 usages found in 3 consumer modules"))
+    return ElementNode(control_type="Group", children=parts)
+
+
+def test_read_usages_panel():
+    panel = ss.read_usages_panel(usages_panel_tree())
+    assert panel is not None
+    assert panel.element_name == "WB_Geo"
+    assert panel.summary == "2 usages found in 3 consumer modules"
+    assert [(r.module, r.usages, r.usages_text) for r in panel.rows] == [
+        ("(local)", 1, "1 usage"),
+        ("MRPolicyManagement_CW", 1, "1 usage"),
+        ("SimuladorMRH", 0, "No usages"),
+    ]
+
+
+def test_read_usages_panel_absent_or_loading():
+    assert ss.read_usages_panel(ElementNode(control_type="Group")) is None
+    loading = ss.read_usages_panel(usages_panel_tree(summary=False))
+    assert loading is not None and loading.summary is None

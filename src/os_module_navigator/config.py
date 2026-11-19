@@ -12,6 +12,11 @@ class NavigatorConfig(BaseModel):
     search_settle_timeout_s: float = Field(default=10.0, gt=0)
     open_verify_timeout_s: float = Field(default=60.0, gt=0)
     close_verify_timeout_s: float = Field(default=15.0, gt=0)
+    dependency_apply_timeout_s: float = Field(default=120.0, gt=0)
+    # Manage Dependencies can take minutes to load its module list ("Processing... 44%").
+    dependency_load_timeout_s: float = Field(default=600.0, gt=0)
+    # Find Usages in all Modules asks the server about every consumer module.
+    find_usages_timeout_s: float = Field(default=180.0, gt=0)
     poll_interval_s: float = Field(default=0.5, gt=0)
     key_delay_s: float = Field(default=0.15, ge=0)
     max_query_length: int = Field(default=200, gt=0)

@@ -32,12 +32,32 @@ DIALOG_UIA_CLASS = "DialogWindow"
 OPEN_FROM_ENVIRONMENT_TITLE = "Open from Environment"
 # Dialogs Service Studio shows briefly while loading; wait them out instead of failing.
 TRANSIENT_DIALOG_TITLES: frozenset[str] = frozenset({"Progress"})
+TRANSIENT_DIALOG_PREFIXES: tuple[str, ...] = ("Progress", "Processing", "Loading")
+# In-dialog loading indicators, e.g. "Processing... (44%)" or "Loading".
+LOADING_TEXT = re.compile(r"^\s*(Processing|Loading)\b|\(\s*\d+\s*%\s*\)|^\s*\d+\s*%\s*$")
+
+
+def is_transient_dialog(title: str) -> bool:
+    """True for progress dialogs Service Studio shows while it works ("Processing... (44%)")."""
+    return title in TRANSIENT_DIALOG_TITLES or title.startswith(TRANSIENT_DIALOG_PREFIXES)
+
+
 SHELL_TABS_AUTOMATION_ID = "tabs"
 WEBVIEW_WIN32_CLASS = "Chrome_RenderWidgetHostHWND"
 UNSAVED_MARKER = "*"
 SEARCH_MODULES_BUTTON_NAME = "Search Modules"
 MODULE_SEARCH_EDIT_NAME = "Search for Module Name, Application Name or Author"
 OPEN_BUTTON_NAME = "Open"
+MANAGE_DEPENDENCIES_TITLE = "Manage Dependencies"
+DEPENDENCY_MODULE_SEARCH_EDIT_NAME = "Search modules"
+DEPENDENCY_ELEMENT_SEARCH_EDIT_NAME = "Search public elements"
+APPLY_BUTTON_NAME = "Apply"
+ALL_FILTER_BUTTON_NAME = "All"
+REFRESH_ALL_BUTTON_NAME = "Refresh all"
+NO_BUTTON_NAME = "No"
+# Shown after Apply when the module still has outdated/missing references.
+OUTDATED_REFERENCES_TITLE = "Modified or missing references found"
+EXTENSION_TAG = "(extension)"
 CANCEL_BUTTON_NAME = "Cancel"
 
 
@@ -320,3 +340,153 @@ def parse_module_caption(caption: str) -> ModuleCaption | None:
 def same_module_name(a: str, b: str) -> bool:
     """OutSystems module names are unique case-insensitively."""
     return a.strip().casefold() == b.strip().casefold()
+
+
+# --- Find Usages in all Modules ----------------------------------------------------
+# Quick search (Ctrl+F): a search box at the top right whose popup lists actions
+# ("Search in this Module", ...) and then results grouped under category headers
+# (Interface, Logic, Data, ...). Chromium flattens the popup into one Group of
+# Image/Text pairs, so results are told apart from headers by their icon.
+QUICK_SEARCH_EDIT_NAME = "Search"
+QUICK_SEARCH_GROUP_PREFIX = "Search in "
+FIND_USAGES_ALL_MODULES_ITEM = "Find Usages in all Modules"
+HELP_WITH_ITEM = re.compile(r"^Help with '(?P<type>.+)'$")
+CONTEXT_MENU_UIA_CLASS = "PopupRoot"
+USAGES_TAB_SUFFIX = " usages in all modules"
+USAGES_TAB_AUTOMATION_ID_PART = "findConsumersPane"
+USAGES_SUMMARY = re.compile(
+    r"^\s*(?P<usages>\d+)\s+usages?\s+found\s+in\s+(?P<modules>\d+)\s+consumer"
+)
+USAGES_CELL = re.compile(r"^\s*(?P<count>\d+)\s+usages?\s*$")
+NO_USAGES = "No usages"
+LOCAL_MODULE = "(local)"
+
+
+class QuickSearchResult(BaseModel):
+    category: str
+    name: str
+
+
+def parse_quick_search(popup: ElementNode) -> list[QuickSearchResult]:
+    """Results of the quick-search popup, in display order (the keyboard order).
+
+    The first rows ("Search in ...", "Search for Help", ...) also have icons but
+    come before the first category header, so they are skipped.
+    """
+    results: list[QuickSearchResult] = []
+    category: str | None = None
+    previous_was_icon = False
+    for node in popup.children:
+        if node.control_type == "Image":
+            previous_was_icon = True
+            continue
+        if node.control_type == "Text" and node.name:
+            if not previous_was_icon:
+                category = node.name
+            elif category is not None:
+                results.append(QuickSearchResult(category=category, name=node.name))
+        previous_was_icon = False
+    return results
+
+
+def find_quick_search_popup(root: ElementNode) -> ElementNode | None:
+    for node in root.iter_nodes():
+        if (
+            node.control_type == "Group"
+            and node.keyboard_focusable
+            and node.name.startswith(QUICK_SEARCH_GROUP_PREFIX)
+            and _is_visible_rect(node)
+        ):
+            return node
+    return None
+
+
+def element_type_from_menu(items: list[str]) -> str | None:
+    """The element type named by the context menu's "Help with 'Server Action'" item."""
+    for item in items:
+        match = HELP_WITH_ITEM.match(item.strip())
+        if match:
+            return match.group("type")
+    return None
+
+
+class UsageRow(BaseModel):
+    module: str
+    usages: int
+    usages_text: str
+
+
+class UsagesPanel(BaseModel):
+    element_name: str
+    rows: list[UsageRow] = Field(default_factory=list)
+    summary: str | None = None
+
+
+def parse_usage_count(text: str) -> int | None:
+    if text.strip().casefold() == NO_USAGES.casefold():
+        return 0
+    match = USAGES_CELL.match(text)
+    return int(match.group("count")) if match else None
+
+
+def usages_tab_element(caption: str) -> str | None:
+    """``'X' usages in all modules`` -> ``X``."""
+    text = caption.strip()
+    if not text.endswith(USAGES_TAB_SUFFIX):
+        return None
+    quoted = text[: -len(USAGES_TAB_SUFFIX)].strip()
+    if len(quoted) >= 2 and quoted[0] == quoted[-1] == "'":
+        return quoted[1:-1]
+    return None
+
+
+def read_usages_panel(root: ElementNode) -> UsagesPanel | None:
+    """Read the "'X' usages in all modules" bottom panel, if it is shown.
+
+    The results grid is flattened like the module search table: two ``Header``
+    elements (Module Name, Usages) and one ``DataItem`` whose ``Text`` children
+    are the cells. Cells are paired by row (same top) and column (header x).
+    """
+    tab = next(
+        (
+            n
+            for n in root.iter_nodes()
+            if n.control_type == "TabItem" and USAGES_TAB_AUTOMATION_ID_PART in n.automation_id
+        ),
+        None,
+    )
+    if tab is None:
+        return None
+    caption = _first_text(tab) or tab.name
+    element = usages_tab_element(caption)
+    if element is None:
+        return None
+    summary = next(
+        (
+            n.name.strip()
+            for n in root.iter_nodes()
+            if n.control_type == "Text" and USAGES_SUMMARY.match(n.name)
+        ),
+        None,
+    )
+    headers = [n for n in root.iter_nodes() if n.control_type == "Header" and n.rect is not None]
+    usages_header = next((h for h in headers if h.name == "Usages"), None)
+    module_header = next((h for h in headers if h.name == "Module Name"), None)
+    rows: list[UsageRow] = []
+    if usages_header is not None and module_header is not None and usages_header.rect is not None:
+        split = usages_header.rect.left
+        cells: dict[int, dict[str, str]] = {}
+        for item in root.iter_nodes():
+            if item.control_type != "DataItem":
+                continue
+            for cell in item.iter_nodes():
+                if cell.control_type != "Text" or not cell.name or cell.rect is None:
+                    continue
+                column = "usages" if cell.rect.left >= split else "module"
+                cells.setdefault(cell.rect.top, {})[column] = cell.name.strip()
+        for top in sorted(cells):
+            row = cells[top]
+            count = parse_usage_count(row.get("usages", ""))
+            if "module" in row and count is not None:
+                rows.append(UsageRow(module=row["module"], usages=count, usages_text=row["usages"]))
+    return UsagesPanel(element_name=element, rows=rows, summary=summary)

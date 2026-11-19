@@ -83,3 +83,65 @@ class TooManyOpenModulesError(NavigatorError):
     def __init__(self, message: str, open_modules: list[str]) -> None:
         super().__init__(message)
         self.open_modules = open_modules
+
+
+class DependenciesDialogUnavailableError(NavigatorError):
+    code = "dependencies_dialog_unavailable"
+
+
+class DependencyNotFoundError(NavigatorError):
+    code = "dependency_not_found"
+
+    def __init__(self, message: str, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
+class AmbiguousDependencyError(NavigatorError):
+    code = "ambiguous_dependency"
+
+    def __init__(self, message: str, candidates: list[str]) -> None:
+        super().__init__(message)
+        self.candidates = candidates
+
+
+class WrongDependencySelectedError(NavigatorError):
+    code = "wrong_dependency_selected"
+
+
+class DependencyChangeFailedError(NavigatorError):
+    code = "dependency_change_failed"
+
+
+class DependencyElementNotFoundError(NavigatorError):
+    code = "dependency_element_not_found"
+
+    def __init__(self, message: str, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
+class AmbiguousDependencyElementError(NavigatorError):
+    code = "ambiguous_dependency_element"
+
+    def __init__(self, message: str, candidates: list[str]) -> None:
+        super().__init__(message)
+        self.candidates = candidates
+
+
+class FindUsagesUnavailableError(NavigatorError):
+    """Quick search, the context menu or the usages panel did not behave as expected."""
+
+    code = "find_usages_unavailable"
+
+
+class ElementNotFoundError(NavigatorError):
+    code = "element_not_found"
+
+    def __init__(self, message: str, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
+class WrongElementSelectedError(NavigatorError):
+    code = "wrong_element_selected"

@@ -8,10 +8,16 @@ Allowed interactions, all scoped to Service Studio windows:
 * UIA ``SelectionItem.Select`` on a shell tab,
 * UIA ``Invoke`` on a module tab's own close button, only when the tab's live
   caption names the expected module and shows no unsaved-changes marker,
-* navigation keys (Up/Down) and Ctrl+O, only after confirming that the
-  expected Service Studio window is the foreground window.
+* navigation keys (Up/Down), Ctrl+O (Open from Environment), Ctrl+Q (Manage
+  Dependencies), Space (toggle a focused dependency checkbox), Ctrl+F (quick
+  search), Shift+F10 (context menu of the selected tree element) and Escape
+  (close a popup), only after confirming that the expected Service Studio
+  window is the foreground window,
+* Enter, only through ``press_enter_on`` and only while UIA reports that the
+  given, already re-checked element (the quick-search box or the context
+  menu's "Find Usages in all Modules" item) has the keyboard focus.
 
-Never: Enter, Delete, typing free text, mouse input, closing windows, closing
+Never: Delete, typing free text, mouse input, closing windows, closing
 modules with unsaved changes, saving or publishing.
 ``tests/test_read_only_guard.py`` keeps interaction calls out of
 every other module.
@@ -27,7 +33,11 @@ from os_module_navigator.automation.live import foreground_window
 from os_module_navigator.errors import FocusError, NavigatorError, UnsavedChangesError
 
 # Keys this module may send. Anything else is refused.
-ALLOWED_KEYS: frozenset[str] = frozenset({"{UP}", "{DOWN}", "^o"})
+ALLOWED_KEYS: frozenset[str] = frozenset(
+    {"{UP}", "{DOWN}", "^o", "^q", "{SPACE}", "^f", "+{F10}", "{ESC}"}
+)
+# Enter is sent only by ``press_enter_on``, never through ``press_keys``.
+_ENTER = "{ENTER}"
 
 
 def _iface(element: Any, pattern: str) -> Any:
@@ -150,3 +160,34 @@ def press_keys(
             )
         keyboard.send_keys(key)
         time.sleep(delay_s)
+
+
+def toggle_focused_checkbox(hwnd: int, checkbox: Any, *, delay_s: float = 0.15) -> None:
+    """Flip a dependency checkbox: focus it, then press Space (UIA Toggle does nothing here)."""
+    ensure_foreground(hwnd, checkbox)
+    set_focus(checkbox)
+    press_keys(hwnd, ["{SPACE}"], delay_s=delay_s)
+
+
+def press_enter_on(hwnd: int, element: Any, *, delay_s: float = 0.15) -> None:
+    """Press Enter, only if ``hwnd`` is in front and ``element`` has the keyboard focus.
+
+    Used to open the selected quick-search result and to run the context menu's
+    "Find Usages in all Modules" item. The caller re-reads ``element`` live and
+    checks its name first, so Enter never lands on another control.
+    """
+    from pywinauto import keyboard
+
+    if foreground_window() != hwnd and not _wait_foreground(hwnd, 1.0, 0.1):
+        raise FocusError(
+            "Service Studio lost the foreground (foreground class: "
+            f"{_foreground_class()}); Enter was not sent."
+        )
+    try:
+        focused = bool(element.element.CurrentHasKeyboardFocus)
+    except Exception:
+        focused = False
+    if not focused:
+        raise FocusError("The expected Service Studio element lost the focus; Enter was not sent.")
+    keyboard.send_keys(_ENTER)
+    time.sleep(delay_s)
